@@ -15,6 +15,11 @@ from packages.core.settings import settings
 
 app = typer.Typer(help="Developer CLI utilities")
 
+# Import and attach jobs subcommands
+from apps.cli.jobs import jobs_app  # noqa: E402,F401
+
+app.add_typer(jobs_app, name="jobs")
+
 
 @app.command("db-doctor")
 def db_doctor() -> None:

@@ -21,7 +21,7 @@ dist/
 build/
 
 # Alembic
-alembic/versions/
+alembic/versions/__pycache__/
 
 # Tests
 .pytest_cache/

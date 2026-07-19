@@ -33,12 +33,10 @@ line-length = 88
 [tool.mypy]
 python_version = 3.12
 strict = true
-# Ensure mypy uses the repository root as an explicit package base and resolves
-# imports consistently when checking sources under `apps` and `packages`.
 explicit_package_bases = true
 mypy_path = ["."]
-# Exclude virtualenvs, build artifacts, and git internals from type checks
 exclude = "(^\\.venv/|^build/|^dist/|^\\.git/|.*/__pycache__/)"
+
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,0 +1,13 @@
+resume_profiles:
+  - track: ml
+    label: "ML resume"
+    source_reference: "data/private/resumes/ml_resume.pdf"
+    active: true
+  - track: cloud
+    label: "Cloud resume"
+    source_reference: "data/private/resumes/cloud_resume.pdf"
+    active: true
+  - track: dev
+    label: "Dev resume"
+    source_reference: "data/private/resumes/dev_resume.pdf"
+    active: true

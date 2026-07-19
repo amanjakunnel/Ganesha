@@ -7,60 +7,31 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 
+from packages.core.domain.models import Base
+
 # allow importing project modules from repo root
 sys.path.insert(0, os.path.abspath('.'))
 
 config = context.config
 
-# Load settings from the central settings module instead of raw DATABASE_URL
-try:
-    # Importing settings may read .env via pydantic-settings; this centralizes logic
-    from packages.core.settings import settings as app_settings  # type: ignore
+# Preserve an explicitly supplied Alembic URL (for tests and tooling).
+# Otherwise, derive the normal local development URL from central settings.
+configured_url = config.get_main_option("sqlalchemy.url")
+
+if not configured_url or configured_url.startswith("driver://"):
+    from packages.core.settings import settings as app_settings
 
     url_obj = app_settings.sqlalchemy_url()
-    # Set the SQLAlchemy URL for alembic using the constructed URL object
-    config.set_main_option('sqlalchemy.url', url_obj.render_as_string(hide_password=False))
-except Exception:
-    # Fall back to previous behavior: load .env if available and infer a safe default
-    POSTGRES_PASSWORD = os.environ.get('POSTGRES_PASSWORD', os.environ.get('PGPASSWORD', 'change_me'))
-    DEFAULT_DB_URL = f"postgresql+psycopg://job_agent:{POSTGRES_PASSWORD}@localhost:5432/job_agent"
-
-    try:
-        from dotenv import load_dotenv
-
-        load_dotenv()
-    except Exception:
-        pass
-
-    db_url = config.get_main_option('sqlalchemy.url') or DEFAULT_DB_URL
-    config.set_main_option('sqlalchemy.url', db_url)
+    config.set_main_option(
+        "sqlalchemy.url",
+        url_obj.render_as_string(hide_password=False),
+    )
 
 # Setup logging from config file
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Attempt to import project's metadata for autogenerate support.
-# If not present, leave target_metadata as None which is safe for an empty initial migration.
-target_metadata = None
-try:
-    # common location for SQLAlchemy Base/metadata
-    from packages.core.domain import models as domain_models  # type: ignore
-
-    if hasattr(domain_models, 'Base'):
-        target_metadata = getattr(domain_models, 'Base').metadata
-    elif hasattr(domain_models, 'metadata'):
-        target_metadata = getattr(domain_models, 'metadata')
-except Exception:
-    try:
-        # fallback to packages.core.domain package exposing Base
-        from packages.core.domain import __init__ as domain_pkg  # type: ignore
-
-        if hasattr(domain_pkg, 'Base'):
-            target_metadata = getattr(domain_pkg, 'Base').metadata
-        elif hasattr(domain_pkg, 'metadata'):
-            target_metadata = getattr(domain_pkg, 'metadata')
-    except Exception:
-        target_metadata = None
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:

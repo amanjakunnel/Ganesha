@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     postgres_db: str = "job_agent"
     postgres_host: str = "localhost"
     postgres_port: int = 5432
+    database_url: Optional[str] = None  # Allow override with DATABASE_URL
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
@@ -26,7 +27,13 @@ class Settings(BaseSettings):
 
         Use sqlalchemy.engine.URL.create to avoid encoding mistakes and make
         intent explicit. Do not log or expose the password in any helpers.
+
+        If DATABASE_URL is set, use it directly. Otherwise construct from individual settings.
         """
+        # Check for DATABASE_URL override first
+        if self.database_url:
+            return URL.create(self.database_url)
+
         # Use URL.create which returns an instance acceptable to SQLAlchemy
         return URL.create(
             drivername="postgresql+psycopg",
