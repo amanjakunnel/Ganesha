@@ -86,6 +86,41 @@ def test_migration_creates_all_tables() -> None:
         assert any(fk["constrained_columns"] == ["company_id"] for fk in foreign_keys)
 
 
+def test_upgrade_downgrade_recreates_tables() -> None:
+    """Test upgrading to head, downgrading to 0002, and upgrading again recreates decision_requests."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        db_url = f"sqlite:///{db_path}"
+
+        alembic_dir = Path(__file__).parent.parent.parent / "alembic"
+        alembic_cfg = Config()
+        alembic_cfg.set_main_option("script_location", str(alembic_dir))
+        alembic_cfg.set_main_option("sqlalchemy.url", db_url)
+
+        # Upgrade to head
+        command.upgrade(alembic_cfg, "head")
+        from sqlalchemy import create_engine
+
+        engine = create_engine(db_url)
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        assert "decision_requests" in tables
+
+        # Downgrade to 0002_create_schema and ensure table removed
+        command.downgrade(alembic_cfg, "0002_create_schema")
+        inspector = inspect(engine)
+        tables_after = inspector.get_table_names()
+        assert "decision_requests" not in tables_after
+
+        # Upgrade again to head and ensure table exists
+        command.upgrade(alembic_cfg, "head")
+        inspector = inspect(engine)
+        tables_after_upgrade = inspector.get_table_names()
+        assert "decision_requests" in tables_after_upgrade
+
+        engine.dispose()
+
+
 def test_orm_models_match_migration() -> None:
     """Test that ORM models can be used with migrated database."""
     with tempfile.TemporaryDirectory() as tmpdir:

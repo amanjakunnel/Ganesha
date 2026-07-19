@@ -49,7 +49,7 @@ def upgrade():
 
 
 def downgrade():
-    op.drop_constraint('uq_decision_idempotency', 'decision_requests', type_='unique')
+    # Inline UniqueConstraint on creation is dropped automatically when the table is dropped.
     op.drop_index('ix_decision_expires', table_name='decision_requests')
     op.drop_index('ix_decision_type', table_name='decision_requests')
     op.drop_index('ix_decision_entity', table_name='decision_requests')
