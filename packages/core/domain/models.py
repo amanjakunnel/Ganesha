@@ -200,3 +200,37 @@ def make_dedupe_key(
     """Generate deduplication key from company, title, and location."""
     key = "|".join([company_name or "", (title or "").lower().strip(), (location or "")])
     return hash_text(key)
+
+
+class DecisionRequest(Base):
+    """Durable decision requests that require human judgment.
+
+    Status values: pending | resolved | expired | superseded
+    """
+
+    __tablename__ = "decision_requests"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=make_uuid)
+    entity_type: Mapped[str] = mapped_column(String(128))
+    entity_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    decision_type: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    reason_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    options_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    default_action: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    selected_action: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_decision_status", "status"),
+        Index("ix_decision_entity", "entity_type", "entity_id"),
+        Index("ix_decision_type", "decision_type"),
+        Index("ix_decision_expires", "expires_at"),
+    )

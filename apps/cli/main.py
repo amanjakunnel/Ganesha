@@ -20,6 +20,11 @@ from apps.cli.jobs import jobs_app  # noqa: E402,F401
 
 app.add_typer(jobs_app, name="jobs")
 
+# Import and attach decisions subcommands
+from apps.cli.decisions_commands import decisions_app  # noqa: E402,F401
+
+app.add_typer(decisions_app, name="decisions")
+
 
 @app.command("db-doctor")
 def db_doctor() -> None:
