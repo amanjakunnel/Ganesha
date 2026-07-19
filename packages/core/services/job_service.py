@@ -278,5 +278,28 @@ def start_referral(session: Session, job_id: str, cutoff_hours: int = 48) -> Ref
     session.add(rt)
     ev = AuditEvent(entity_type="job_posting", entity_id=jp.id, event_type="referral_started", payload={"cutoff_hours": cutoff_hours})
     session.add(ev)
+    # Create a decision request for referral timing so the user is only notified when needed.
+    try:
+        # import locally to avoid circular import at module load time
+        from packages.core.services.decision_service import create_decision_request
+
+        idempotency = f"referral:{rt.id}"
+        options = ["request_referral", "apply_now", "wait_until_cutoff", "skip"]
+        # default action: wait until cutoff, configurable later
+        create_decision_request(
+            session,
+            entity_type="job_posting",
+            entity_id=jp.id,
+            decision_type="referral_window",
+            reason_code="referral_timing",
+            summary="Decide how to handle referral timing for this job",
+            options=options,
+            default_action="wait_until_cutoff",
+            expires_at=rt.cutoff_at,
+            idempotency_key=idempotency,
+        )
+    except Exception:
+        # Do not fail referral start if decision creation has issues; keep original behavior.
+        pass
     session.flush()
     return rt
