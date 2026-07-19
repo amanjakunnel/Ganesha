@@ -196,7 +196,18 @@ def referral_start_cmd(job_id: str, cutoff_hours: int = 48) -> None:
     try:
         rt = start_referral(session, job_id, cutoff_hours=cutoff_hours)
         session.commit()
-        typer.echo(f"Referral task started, cutoff_at={rt.cutoff_at}")
+        # Attempt to find a linked decision request created by start_referral
+        from packages.core.domain.models import DecisionRequest
+
+        dec = (
+            session.query(DecisionRequest)
+            .filter(DecisionRequest.idempotency_key == f"referral:{rt.id}")
+            .one_or_none()
+        )
+        if dec:
+            typer.echo(f"Referral task started, cutoff_at={rt.cutoff_at}, decision_id={dec.id}")
+        else:
+            typer.echo(f"Referral task started, cutoff_at={rt.cutoff_at}")
     finally:
         session.close()
 
