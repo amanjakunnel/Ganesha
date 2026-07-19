@@ -40,12 +40,12 @@ def upgrade():
         sa.Column('resolution_note', sa.Text(), nullable=True),
         sa.Column('idempotency_key', sa.String(length=255), nullable=True),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
+        sa.UniqueConstraint('idempotency_key', name='uq_decision_idempotency'),
     )
     op.create_index('ix_decision_status', 'decision_requests', ['status'])
     op.create_index('ix_decision_entity', 'decision_requests', ['entity_type', 'entity_id'])
     op.create_index('ix_decision_type', 'decision_requests', ['decision_type'])
     op.create_index('ix_decision_expires', 'decision_requests', ['expires_at'])
-    op.create_unique_constraint('uq_decision_idempotency', 'decision_requests', ['idempotency_key'])
 
 
 def downgrade():

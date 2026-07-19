@@ -3,7 +3,8 @@ from datetime import datetime, timedelta
 from packages.core.domain.models import Base, DecisionRequest
 from packages.core.db import get_engine, SessionLocal
 from packages.core.services import decision_service
-from packages.core.services.decision_service import DecisionNotFoundError, InvalidActionError, InvalidTransitionError
+from packages.core.services.decision_service import InvalidActionError, InvalidTransitionError
+from packages.core.domain.models import AuditEvent
 
 
 def setup_module(module: object) -> None:
@@ -134,7 +135,8 @@ def test_list_pending_excludes_resolved_and_expired() -> None:
     session.commit()
     _ = decision_service.resolve_decision_request(session, decision_id=d.id, actor="tester", selected_action="ok")
     session.commit()
-    # expired
+    # expired: create with future expiry, then move it into the past via an explicit update
+    future = datetime.utcnow() + timedelta(hours=1)
     d_exp = decision_service.create_decision_request(
         session,
         entity_type="job_posting",
@@ -144,12 +146,17 @@ def test_list_pending_excludes_resolved_and_expired() -> None:
         summary=None,
         options=["ok"],
         default_action="ok",
-        expires_at=datetime.utcnow() - timedelta(minutes=1),
+        expires_at=future,
         idempotency_key="list-expired",
     )
     session.commit()
+    # simulate time passing by setting expires_at to past and committing
+    d_exp_db = session.query(DecisionRequest).filter(DecisionRequest.id == d_exp.id).one()
+    d_exp_db.expires_at = datetime.utcnow() - timedelta(minutes=1)
+    session.add(d_exp_db)
+    session.commit()
     # expiry run
-    cnt = decision_service.expire_due_decision_requests(session)
+    cnt = decision_service.expire_due_decision_requests(session, now=datetime.utcnow())
     session.commit()
     assert cnt >= 1
     pend = decision_service.list_pending_decisions(session)
@@ -217,6 +224,7 @@ def test_resolve_invalid_action_rejected_and_re_resolve_rejected() -> None:
 
 def test_expiry_is_idempotent() -> None:
     session = SessionLocal()
+    # create with future expiry, then move to past
     d = decision_service.create_decision_request(
         session,
         entity_type="job_posting",
@@ -226,13 +234,21 @@ def test_expiry_is_idempotent() -> None:
         summary=None,
         options=["ok"],
         default_action="ok",
-        expires_at=datetime.utcnow() - timedelta(minutes=1),
+        expires_at=datetime.utcnow() + timedelta(hours=1),
         idempotency_key="exp1",
     )
     session.commit()
-    cnt1 = decision_service.expire_due_decision_requests(session)
+    # set to past
+    d_db = session.query(DecisionRequest).filter(DecisionRequest.id == d.id).one()
+    d_db.expires_at = datetime.utcnow() - timedelta(minutes=1)
+    session.add(d_db)
     session.commit()
-    cnt2 = decision_service.expire_due_decision_requests(session)
+    cnt1 = decision_service.expire_due_decision_requests(session, now=datetime.utcnow())
+    session.commit()
+    # count audit events for expiry
+    evs = session.query(AuditEvent).filter(AuditEvent.entity_type == "decision_request", AuditEvent.entity_id == d.id, AuditEvent.event_type == "decision_request_expired").all()
+    assert len(evs) == 1
+    cnt2 = decision_service.expire_due_decision_requests(session, now=datetime.utcnow())
     session.commit()
     assert cnt1 >= 1
     assert cnt2 == 0

@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Iterable, List
+from typing import Iterable, List
 
-from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
-from packages.core.domain import models
 from packages.core.domain.models import AuditEvent, DecisionRequest
 
 
@@ -112,7 +110,7 @@ def list_pending_decisions(
     now = datetime.utcnow()
     q = session.query(DecisionRequest).filter(DecisionRequest.status == "pending")
     # exclude expired
-    q = q.filter((DecisionRequest.expires_at == None) | (DecisionRequest.expires_at > now))  # noqa: E711
+    q = q.filter((DecisionRequest.expires_at.is_(None)) | (DecisionRequest.expires_at > now))
     if decision_type:
         q = q.filter(DecisionRequest.decision_type == decision_type)
     if entity_type:
@@ -173,7 +171,7 @@ def expire_due_decision_requests(session: Session, *, now: datetime | None = Non
     pending = (
         session.query(DecisionRequest)
         .filter(DecisionRequest.status == "pending")
-        .filter(DecisionRequest.expires_at != None)
+        .filter(DecisionRequest.expires_at.is_not(None))
         .filter(DecisionRequest.expires_at <= now)
         .all()
     )
