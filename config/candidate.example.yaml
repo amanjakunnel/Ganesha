@@ -1,0 +1,34 @@
+candidate:
+  candidate_id: "candidate_001"
+  degree: "M.S. Computer Science and Engineering"
+  university: "Penn State"
+  active_expected_graduation: "2027-05"
+  alternate_completion_date: "2026-12"
+  degree_stem_designated: true
+  employment_types:
+    - full_time
+  internships_or_coops_allowed: false
+  years_relevant_cloud_experience: 2
+
+application_answers:
+  work_authorization:
+    legal_authorized_answer: "YES_REQUIRES_VERIFIED_OPT_PROFILE"
+    future_sponsorship_answer: "YES"
+    citizenship_answer: "NO"
+    permanent_resident_answer: "NO"
+  relocation:
+    willing_to_relocate: true
+    willing_to_travel: true
+    preferred_region: "Philadelphia metro first; U.S. nationwide acceptable"
+  voluntary_self_id:
+    default: "DECLINE_TO_SELF_IDENTIFY"
+  salary:
+    annual_floor_usd: 120000
+    hourly_floor_usd: 50
+    required_salary_policy: "POSTED_RANGE_OR_CONFIGURED_BAND_OR_MANUAL_REVIEW"
+
+# Important notes:
+# - Do not auto-answer legal authorization until a later verified authorization profile exists.
+# - "Future sponsorship" defaults to Yes.
+# - Roles requiring U.S. citizenship, permanent residency, or active security clearance must be refused.
+# - Ambiguous export-control wording (ITAR/EAR) must be escalated to MANUAL_REVIEW.

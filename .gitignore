@@ -1,0 +1,36 @@
+# Environment, credentials, private data
+.env
+credentials*
+token*.json
+*.pem
+data/private/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtualenv
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Build
+dist/
+build/
+
+# Alembic
+alembic/versions/
+
+# Tests
+.pytest_cache/
+
+# Do not commit any personal resume or candidate private docs
+data/candidate_resume*/
+
+# Python packaging metadata
+*.egg-info/
+
+# Accidental nested project copy
+job-application-agent/

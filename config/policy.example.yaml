@@ -1,0 +1,40 @@
+job_targeting:
+  allow:
+    - Software Engineer
+    - Backend Engineer
+    - Full-Stack Engineer
+    - Cloud Engineer
+    - Cloud Platform Engineer
+    - Infrastructure Engineer
+    - Platform Engineer
+    - DevOps Engineer
+    - Site Reliability Engineer
+    - Production Engineer
+    - Systems Engineer
+    - Data Engineer
+    - MLOps Engineer
+    - ML Platform Engineer
+  review_if_evidence_needed:
+    - ML Engineer
+  disallow:
+    - Internship
+    - Co-op
+    - Electrical Engineer
+    - Firmware
+    - Hardware
+    - Government-only
+    - Clearance-required
+
+referral:
+  hold_hours: 48
+
+sheets:
+  spreadsheet_id: "1GWWHljxgghvhCtQRkIlV-hfC9RoKcgGgj5PDFR6NDVM"
+  tabs:
+    - Applications
+    - Audit_Log
+    - Referrals
+    - Config
+
+workflow:
+  dry_run_default: true

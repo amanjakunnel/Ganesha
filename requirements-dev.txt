@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+psycopg[binary]
+alembic
+pydantic-settings
+typer
+pytest
+pytest-asyncio
+ruff
+mypy
+pre-commit
+python-dotenv
