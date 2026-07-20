@@ -4,6 +4,7 @@ from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
+from sqlalchemy.engine.url import make_url
 
 
 class Settings(BaseSettings):
@@ -32,7 +33,10 @@ class Settings(BaseSettings):
         """
         # Check for DATABASE_URL override first
         if self.database_url:
-            return URL.create(self.database_url)
+            # Parse a full URL string into a SQLAlchemy URL object safely.
+            # URL.create does not accept a full URL string on some SQLAlchemy versions,
+            # so use make_url to parse a string value.
+            return make_url(self.database_url)
 
         # Use URL.create which returns an instance acceptable to SQLAlchemy
         return URL.create(

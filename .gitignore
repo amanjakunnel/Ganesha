@@ -26,6 +26,9 @@ alembic/versions/__pycache__/
 # Tests
 .pytest_cache/
 
+# Local pytest test DB
+.pytest_test_db.sqlite
+
 # Do not commit any personal resume or candidate private docs
 data/candidate_resume*/
 
