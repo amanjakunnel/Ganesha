@@ -25,6 +25,11 @@ from apps.cli.decisions_commands import decisions_app  # noqa: E402,F401
 
 app.add_typer(decisions_app, name="decisions")
 
+# Import and attach telegram subcommands
+from apps.cli.telegram_cli import telegram_app  # noqa: E402,F401
+
+app.add_typer(telegram_app, name="telegram")
+
 
 @app.command("db-doctor")
 def db_doctor() -> None:
@@ -60,6 +65,46 @@ def db_doctor() -> None:
 
 def main(argv: list[str] | None = None) -> Any:  # pragma: no cover - entrypoint wrapper
     return app(prog_name="dev-cli", args=argv or sys.argv[1:])
+
+
+@app.command("db-reset-local")
+def db_reset_local(yes: bool = typer.Option(False, "--yes", help="Confirm destructive reset of the local dev database")) -> None:
+    """Safely drop all tables in the configured local database and run migrations.
+
+    This command refuses to run against a non-local host. It requires an explicit
+    --yes confirmation to proceed. It drops all tables from the configured
+    SQLALCHEMY URL and then runs alembic upgrade head to recreate schema.
+    """
+    # Use central settings to determine target DB and host
+    url = settings.sqlalchemy_url()
+    host = getattr(url, "host", None)
+    if host not in ("localhost", "127.0.0.1", "::1", None):
+        typer.secho(f"Refusing to reset non-local database host: {host}", fg=typer.colors.RED)
+        raise typer.Exit(code=2)
+
+    if not yes:
+        typer.echo("This will DROP ALL TABLES in the configured local database.")
+        typer.echo("Re-run with --yes to confirm. Aborting.")
+        raise typer.Exit(code=2)
+
+    # Proceed with dropping and re-running migrations
+    try:
+        engine = create_engine(settings.sqlalchemy_url())
+        from packages.core.domain.models import Base
+
+        typer.echo("Dropping all tables...")
+        Base.metadata.drop_all(bind=engine)
+        typer.secho("Dropped local database tables.", fg=typer.colors.GREEN)
+
+        typer.echo("Running migrations (alembic upgrade head)...")
+        import subprocess
+
+        subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], check=True)
+        typer.secho("Migrations applied.", fg=typer.colors.GREEN)
+    except Exception as exc:  # pragma: no cover - runtime tool
+        typer.secho("Failed to reset local database:", fg=typer.colors.RED)
+        typer.echo(str(exc))
+        raise typer.Exit(code=3)
 
 
 if __name__ == "__main__":

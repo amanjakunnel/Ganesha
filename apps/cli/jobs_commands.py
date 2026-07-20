@@ -194,8 +194,18 @@ def referral_start_cmd(job_id: str, cutoff_hours: int = 48) -> None:
     """Start a referral task for a job posting with a 48-hour cutoff."""
     session: Session = SessionLocal()
     try:
-        rt = start_referral(session, job_id, cutoff_hours=cutoff_hours)
-        session.commit()
+        try:
+            rt = start_referral(session, job_id, cutoff_hours=cutoff_hours)
+            session.commit()
+        except Exception as exc:
+            from packages.core.services.job_service import JobNotFoundError
+
+            if isinstance(exc, JobNotFoundError):
+                typer.echo(f"Job not found: {job_id}")
+                raise typer.Exit(code=1)
+            # re-raise unexpected exceptions
+            raise
+
         # Attempt to find a linked decision request created by start_referral
         from packages.core.domain.models import DecisionRequest
 

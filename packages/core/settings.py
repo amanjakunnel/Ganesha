@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     postgres_host: str = "localhost"
     postgres_port: int = 5432
     database_url: Optional[str] = None  # Allow override with DATABASE_URL
+    telegram_bot_token: Optional[str] = None
+    telegram_allowed_user_id: Optional[int] = None
+    telegram_allowed_chat_id: Optional[int] = None
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

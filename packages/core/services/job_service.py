@@ -272,8 +272,14 @@ def list_review_queue(session: Session) -> list[JobPosting]:
     return session.query(JobPosting).filter(JobPosting.status.in_(["queued_for_review", "new"])).all()
 
 
+class JobNotFoundError(Exception):
+    """Raised when a requested JobPosting cannot be found."""
+
+
 def start_referral(session: Session, job_id: str, cutoff_hours: int = 48) -> ReferralTask:
-    jp = session.query(JobPosting).filter(JobPosting.id == job_id).one()
+    jp = session.query(JobPosting).filter(JobPosting.id == job_id).one_or_none()
+    if jp is None:
+        raise JobNotFoundError(job_id)
     rt = ReferralTask(job_posting_id=jp.id, status="draft_ready", cutoff_at=datetime.utcnow() + timedelta(hours=cutoff_hours))
     session.add(rt)
     # ensure rt.id is assigned before building idempotency key

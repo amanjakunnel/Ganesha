@@ -46,6 +46,9 @@ sheets-sync:
 db-doctor:
 	$(VENV)/bin/python -m apps.cli.main db-doctor
 
+db-reset-local:
+	$(VENV)/bin/python -m apps.cli.main db-reset-local --yes
+
 check:
 	$(VENV)/bin/python -c "import tomllib; tomllib.load(open('pyproject.toml','rb')); print('valid TOML')"
 	$(VENV)/bin/python --version
