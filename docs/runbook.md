@@ -22,8 +22,11 @@ Common tasks
 - Type checking:
   make typecheck
 
-- Seed demo data (after migrations are implemented):
+- Seed demo workflow (creates demo job, fit, referral decision, application):
   make seed-demo
+
+- Workflow dashboard:
+  make workflow-dashboard
 
 - Sheets initialization (creates tabs if missing):
   make sheets-init

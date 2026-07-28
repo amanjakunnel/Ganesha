@@ -46,6 +46,19 @@ Quick start (macOS)
 5. Run tests:
    make test
 
+Product loop (local)
+--------------------
+After `make migrate`, run the end-to-end demo workflow:
+
+   make seed-demo
+   .venv/bin/python -m apps.cli.main workflow dashboard
+   .venv/bin/python -m apps.cli.main workflow queue
+   .venv/bin/python -m apps.cli.main decisions list
+
+Optional Telegram operator console (requires TELEGRAM_BOT_TOKEN in `.env`):
+
+   .venv/bin/python -m apps.cli.main telegram run
+
 See Makefile and docs/runbook.md for full commands and notes.
 
 Database migrations

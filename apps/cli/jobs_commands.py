@@ -117,6 +117,25 @@ def assess(job_id: str) -> None:
         session.close()
 
 
+@jobs_app.command(name="queue")
+def queue_cmd(limit: int = 20) -> None:
+    """List actionable jobs (alias for workflow queue)."""
+    from packages.core.services import workflow_service
+
+    session: Session = SessionLocal()
+    try:
+        items = workflow_service.list_actionable_queue(session, limit=limit)
+        if not items:
+            typer.echo("Actionable queue is empty.")
+            return
+        for item in items:
+            typer.echo(
+                f"{item.job_id} | {item.lifecycle} | {item.company} | {item.title[:60]} | {item.reason}"
+            )
+    finally:
+        session.close()
+
+
 @jobs_app.command()
 def triage() -> None:
     """List jobs queued for review."""

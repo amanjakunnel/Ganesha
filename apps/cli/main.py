@@ -30,6 +30,18 @@ from apps.cli.telegram_cli import telegram_app  # noqa: E402,F401
 
 app.add_typer(telegram_app, name="telegram")
 
+from apps.cli.fit_commands import fit_app  # noqa: E402
+
+app.add_typer(fit_app, name="fit")
+
+from apps.cli.application_commands import applications_app  # noqa: E402
+
+app.add_typer(applications_app, name="applications")
+
+from apps.cli.workflow_commands import workflow_app  # noqa: E402
+
+app.add_typer(workflow_app, name="workflow")
+
 
 @app.command("db-doctor")
 def db_doctor() -> None:
@@ -94,6 +106,9 @@ def db_reset_local(yes: bool = typer.Option(False, "--yes", help="Confirm destru
 
         typer.echo("Dropping all tables...")
         Base.metadata.drop_all(bind=engine)
+        with engine.connect() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
+            conn.commit()
         typer.secho("Dropped local database tables.", fg=typer.colors.GREEN)
 
         typer.echo("Running migrations (alembic upgrade head)...")

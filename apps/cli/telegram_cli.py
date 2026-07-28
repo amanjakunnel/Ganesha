@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 
 from packages.core.db import SessionLocal
 from packages.core.domain.models import DecisionRequest
-from packages.core.services import decision_service
+from packages.core.services import decision_service, workflow_service
+from packages.core.services.job_service import JobNotFoundError
 from packages.core.services.telegram import TelegramBotClient, is_authorized
 from packages.core.settings import settings
 
@@ -57,7 +58,10 @@ def handle_telegram_message(
             "Welcome to the Ganesha Decision Agent Bot!\n\n"
             "Commands:\n"
             "/decisions - List pending decisions\n"
-            "/decision &lt;id&gt; - Show a specific decision",
+            "/decision <id> - Show a specific decision\n"
+            "/queue - Actionable job queue\n"
+            "/job <id> - Job summary\n"
+            "/application <id> - Application summary",
         )
     elif text.startswith("/decisions"):
         pending = decision_service.list_pending_decisions(session)
@@ -72,6 +76,39 @@ def handle_telegram_message(
             ]
             markup = {"inline_keyboard": [buttons]} if buttons else None
             client.send_message(chat_id, format_decision_message(d), reply_markup=markup)
+    elif text.startswith("/queue"):
+        items = workflow_service.list_actionable_queue(session, limit=10)
+        if not items:
+            client.send_message(chat_id, "Actionable queue is empty.")
+            return
+        lines = ["<b>Actionable queue</b>"]
+        for item in items:
+            lines.append(
+                f"• <code>{item.job_id}</code> [{item.lifecycle}] {item.company}: {item.title[:40]}"
+            )
+        client.send_message(chat_id, "\n".join(lines))
+    elif text.startswith("/job"):
+        parts = text.split(None, 1)
+        if len(parts) < 2:
+            client.send_message(chat_id, "Usage: /job <id>")
+            return
+        job_id = parts[1].strip()
+        try:
+            summary = workflow_service.format_job_summary(session, job_id)
+            client.send_message(chat_id, f"<pre>{summary}</pre>")
+        except JobNotFoundError:
+            client.send_message(chat_id, "Job not found.")
+    elif text.startswith("/application"):
+        parts = text.split(None, 1)
+        if len(parts) < 2:
+            client.send_message(chat_id, "Usage: /application <id>")
+            return
+        app_id = parts[1].strip()
+        try:
+            summary = workflow_service.format_application_summary(session, app_id)
+            client.send_message(chat_id, f"<pre>{summary}</pre>")
+        except Exception:
+            client.send_message(chat_id, "Application not found.")
     elif text.startswith("/decision"):
         parts = text.split(None, 1)
         if len(parts) < 2:
@@ -145,7 +182,7 @@ def handle_telegram_callback(
                 return
 
             # Resolve using service
-            decision_service.resolve_decision_request(
+            workflow_service.resolve_decision_with_effects(
                 session,
                 decision_id=decision_id,
                 actor=f"telegram:{user_id}",

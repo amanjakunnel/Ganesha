@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 from datetime import datetime, timedelta
+
 import typer
 from sqlalchemy.orm import Session
 
 from packages.core.db import SessionLocal
-from packages.core.services import decision_service
+from packages.core.services import decision_service, workflow_service
 from packages.core.domain.models import DecisionRequest, Company, JobPosting, ReferralTask, make_dedupe_key, make_description_hash
 
 
@@ -54,7 +57,9 @@ def resolve_decision(decision_id: str, action: str, actor: str = typer.Option("c
     session: Session = SessionLocal()
     try:
         try:
-            d = decision_service.resolve_decision_request(session, decision_id=decision_id, actor=actor, selected_action=action, note=note)
+            d = workflow_service.resolve_decision_with_effects(
+                session, decision_id=decision_id, actor=actor, selected_action=action, note=note
+            )
             session.commit()
             typer.echo(f"Resolved: {d.id} -> {d.selected_action} by {d.resolved_by}")
         except decision_service.DecisionNotFoundError:
@@ -137,8 +142,8 @@ def demo_referral() -> None:
             decision_type="referral_window",
             reason_code="referral_needed",
             summary="Demo Referral Window Decision Request",
-            options=["start_referral", "skip_referral"],
-            default_action="start_referral",
+            options=["request_referral", "apply_now", "wait_until_cutoff", "skip"],
+            default_action="wait_until_cutoff",
             expires_at=datetime.utcnow() + timedelta(hours=48),
             idempotency_key=idem_key,
         )
@@ -163,8 +168,8 @@ def demo_referral() -> None:
         typer.echo("")
         typer.echo("Follow-up Commands:")
         typer.echo(f"  Show:    .venv/bin/python -m apps.cli.main decisions show {d.id}")
-        typer.echo(f"  List:    .venv/bin/python -m apps.cli.main decisions list")
-        typer.echo(f"  Resolve: .venv/bin/python -m apps.cli.main decisions resolve {d.id} start_referral")
+        typer.echo("  List:    .venv/bin/python -m apps.cli.main decisions list")
+        typer.echo(f"  Resolve: .venv/bin/python -m apps.cli.main decisions resolve {d.id} request_referral")
 
     except Exception as exc:
         session.rollback()

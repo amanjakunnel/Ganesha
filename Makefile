@@ -35,7 +35,10 @@ run:
 	$(VENV)/bin/python -m uvicorn apps.api.main:app --reload
 
 seed-demo:
-	$(VENV)/bin/python -m apps.cli.main
+	$(VENV)/bin/python -m apps.cli.main workflow demo
+
+workflow-dashboard:
+	$(VENV)/bin/python -m apps.cli.main workflow dashboard
 
 sheets-init:
 	$(VENV)/bin/python -m apps.cli.main
