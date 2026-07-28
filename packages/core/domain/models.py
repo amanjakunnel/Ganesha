@@ -142,6 +142,59 @@ class ResumeProfile(Base):
     )
 
 
+class JobFitResult(Base):
+    """Resume/cover-letter fit package for a job (truthful, evidence-grounded)."""
+
+    __tablename__ = "job_fit_results"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=make_uuid)
+    job_posting_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("job_postings.id"), unique=True
+    )
+    recommended_track: Mapped[str] = mapped_column(String(32))
+    key_requirements: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    missing_evidence: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    readiness_status: Mapped[str] = mapped_column(
+        String(32), default="blocked"
+    )  # ready | needs_decision | blocked
+    next_action: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    job: Mapped[JobPosting] = relationship("JobPosting")
+
+
+class JobApplication(Base):
+    """Manual-submission application lifecycle for a job."""
+
+    __tablename__ = "job_applications"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=make_uuid)
+    job_posting_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("job_postings.id"), unique=True
+    )
+    selected_track: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(32), default="draft"
+    )  # draft | ready_to_apply | submitted | rejected | interview | withdrawn | skipped
+    submitted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    job: Mapped[JobPosting] = relationship("JobPosting")
+
+
 class ReferralTask(Base):
     """Tracks referral opportunities and 48-hour cutoff."""
 

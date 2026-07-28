@@ -209,13 +209,28 @@ def assess_job(session: Session, job_id: str) -> JobAssessment:
     text = (jp.title or "") + "\n" + (jp.description_text or "")
     text_lower = text.lower()
 
+    existing_assessment = (
+        session.query(JobAssessment).filter(JobAssessment.job_posting_id == jp.id).one_or_none()
+    )
+
+    def _save_assessment(**kwargs: Any) -> JobAssessment:
+        if existing_assessment:
+            for key, val in kwargs.items():
+                setattr(existing_assessment, key, val)
+            session.add(existing_assessment)
+            session.flush()
+            return existing_assessment
+        assessment = JobAssessment(job_posting_id=jp.id, **kwargs)
+        session.add(assessment)
+        session.flush()
+        return assessment
+
     # Short description -> manual review
     if len(jp.description_text or "") < 100 or len((jp.title or "").split()) < 2:
         rec = "manual_review"
         score = 0
         explanation = {"reason": "insufficient_text"}
-        assessment = JobAssessment(
-            job_posting_id=jp.id,
+        assessment = _save_assessment(
             recommended_track=rec,
             score=score,
             score_explanation=explanation,
@@ -223,10 +238,10 @@ def assess_job(session: Session, job_id: str) -> JobAssessment:
             missing_or_uncertain_skills=[],
             manual_review_reasons=["short_description_or_ambiguous_title"],
         )
-        session.add(assessment)
-        session.flush()
         ev = AuditEvent(entity_type="job_posting", entity_id=jp.id, event_type="assessed", payload={"track": rec})
         session.add(ev)
+        setattr(jp, "status", "assessed")
+        session.add(jp)
         return assessment
 
     # Score per track
@@ -251,8 +266,7 @@ def assess_job(session: Session, job_id: str) -> JobAssessment:
     if score < 30:
         rec_track = "manual_review"
 
-    assessment = JobAssessment(
-        job_posting_id=jp.id,
+    assessment = _save_assessment(
         recommended_track=rec_track,
         score=score,
         score_explanation={"scores": track_scores, "matches": track_matches},
@@ -260,7 +274,6 @@ def assess_job(session: Session, job_id: str) -> JobAssessment:
         missing_or_uncertain_skills=[],
         manual_review_reasons=[],
     )
-    session.add(assessment)
     setattr(jp, "status", "queued_for_review")
     ev = AuditEvent(entity_type="job_posting", entity_id=jp.id, event_type="assessed", payload={"track": rec_track, "score": score})
     session.add(ev)
@@ -280,6 +293,11 @@ def start_referral(session: Session, job_id: str, cutoff_hours: int = 48) -> Ref
     jp = session.query(JobPosting).filter(JobPosting.id == job_id).one_or_none()
     if jp is None:
         raise JobNotFoundError(job_id)
+    existing = (
+        session.query(ReferralTask).filter(ReferralTask.job_posting_id == jp.id).one_or_none()
+    )
+    if existing:
+        return existing
     rt = ReferralTask(job_posting_id=jp.id, status="draft_ready", cutoff_at=datetime.utcnow() + timedelta(hours=cutoff_hours))
     session.add(rt)
     # ensure rt.id is assigned before building idempotency key

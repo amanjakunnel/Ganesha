@@ -40,6 +40,9 @@ def test_migration_creates_all_tables() -> None:
             "resume_profiles",
             "referral_tasks",
             "audit_events",
+            "decision_requests",
+            "job_fit_results",
+            "job_applications",
             "alembic_version",
         ]
         
