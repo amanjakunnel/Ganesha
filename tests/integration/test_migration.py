@@ -43,6 +43,7 @@ def test_migration_creates_all_tables() -> None:
             "decision_requests",
             "job_fit_results",
             "job_applications",
+            "referral_contacts",
             "alembic_version",
         ]
         

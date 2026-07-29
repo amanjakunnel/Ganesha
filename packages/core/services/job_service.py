@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import json
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -10,33 +9,12 @@ from sqlalchemy.orm import Session
 
 from packages.core.domain.models import (
     JobPosting,
-    Company,
     JobAssessment,
     ReferralTask,
     AuditEvent,
-    make_description_hash,
-    make_dedupe_key,
 )
-
-
-@dataclass
-class ImportResult:
-    created: int = 0
-    duplicates: int = 0
-    errors: list[str] = field(default_factory=list)
-
-
-def _get_or_create_company(session: Session, name: str) -> Company | None:
-    name_norm = (name or "").strip()
-    if not name_norm:
-        return None
-    existing = session.query(Company).filter(Company.canonical_name == name_norm).one_or_none()
-    if existing:
-        return existing
-    c = Company(canonical_name=name_norm)
-    session.add(c)
-    session.flush()
-    return c
+from packages.core.services.job_intake import ImportResult, upsert_job_from_import
+from packages.core.services.job_scoring import TRACK_KEYWORDS
 
 
 def _parse_row(row: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
@@ -102,56 +80,27 @@ def import_json(session: Session, path: str) -> ImportResult:
 
 
 def _create_or_flag(session: Session, data: dict[str, Any], source: str) -> bool:
-    title = data["title"]
-    company_name = data["company"]
-    description_text = data["description_text"]
-
-    desc_hash = make_description_hash(description_text)
-    dedupe_key = make_dedupe_key(company_name, title, data.get("location"))
-
-    # Check for suspected duplicates by dedupe_key or description_hash
-    existing = (
-        session.query(JobPosting)
-        .filter((JobPosting.dedupe_key == dedupe_key) | (JobPosting.description_hash == desc_hash))
-        .one_or_none()
+    job_id, created = upsert_job_from_import(
+        session,
+        {
+            "title": data["title"],
+            "company": data["company"],
+            "description_text": data["description_text"],
+            "canonical_url": data.get("canonical_url"),
+            "external_id": data.get("external_id"),
+            "location": data.get("location"),
+            "workplace_type": data.get("workplace_type"),
+            "employment_type": data.get("employment_type"),
+            "posted_at": data.get("posted_at"),
+            "application_deadline": data.get("application_deadline"),
+            "raw_payload": data.get("raw_payload"),
+            "source_import_key": data.get("source_import_key"),
+        },
+        source_name="manual" if source == "manual" else source,
+        source_type=source,
+        legacy_source=source,
     )
-
-    if existing:
-        # Create audit event and mark existing for review
-        ev = AuditEvent(entity_type="job_posting", entity_id=existing.id, event_type="duplicate_suspected", payload={"source": source})
-        session.add(ev)
-        setattr(existing, "status", "queued_for_review")
-        session.add(existing)
-        session.flush()
-        return False
-
-    company = _get_or_create_company(session, company_name)
-
-    jp = JobPosting(
-        source=source,
-        external_id=data.get("external_id"),
-        canonical_url=data.get("canonical_url"),
-        title=title,
-        company_id=company.id if company else None,
-        location=data.get("location"),
-        workplace_type=data.get("workplace_type"),
-        employment_type=data.get("employment_type"),
-        description_text=description_text,
-        posted_at=_parse_date(data.get("posted_at")),
-        application_deadline=_parse_date(data.get("application_deadline")),
-        status="new",
-        normalized_title=title.lower().strip(),
-        description_hash=desc_hash,
-        dedupe_key=dedupe_key,
-        raw_payload=data.get("raw_payload") if source != "manual" else None,
-    )
-    session.add(jp)
-    session.flush()
-
-    ev = AuditEvent(entity_type="job_posting", entity_id=jp.id, event_type="ingested", payload={"source": source})
-    session.add(ev)
-    session.flush()
-    return True
+    return created
 
 
 def _parse_date(val: Any) -> datetime | None:
@@ -164,44 +113,6 @@ def _parse_date(val: Any) -> datetime | None:
     except Exception:
         return None
 
-
-# Scoring logic
-
-TRACK_KEYWORDS = {
-    "ml": [
-        "machine learning",
-        "machine-learning",
-        "mlops",
-        "deep learning",
-        "tensorflow",
-        "pytorch",
-        "scikit",
-        "data scientist",
-        "model",
-        "nlp",
-    ],
-    "cloud": [
-        "aws",
-        "azure",
-        "gcp",
-        "kubernetes",
-        "docker",
-        "terraform",
-        "cloud",
-        "devops",
-        "infrastructure",
-    ],
-    "dev": [
-        "backend",
-        "api",
-        "python",
-        "java",
-        "node",
-        "software engineer",
-        "full-stack",
-        "frontend",
-    ],
-}
 
 
 def assess_job(session: Session, job_id: str) -> JobAssessment:

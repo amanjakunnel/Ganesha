@@ -41,6 +41,7 @@ class Company(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=make_uuid)
     canonical_name: Mapped[str] = mapped_column(String(255), unique=True)
     website_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    normalized_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -55,9 +56,12 @@ class JobPosting(Base):
     __tablename__ = "job_postings"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=make_uuid)
-    source: Mapped[str] = mapped_column(String(32))  # manual, csv_import, json_import
+    source: Mapped[str] = mapped_column(String(32))  # legacy import channel
+    source_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     canonical_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    company_apply_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     title: Mapped[str] = mapped_column(String(512))
     company_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("companies.id"), nullable=True
@@ -72,6 +76,9 @@ class JobPosting(Base):
     discovered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    scraped_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     application_deadline: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -82,6 +89,8 @@ class JobPosting(Base):
     description_hash: Mapped[str] = mapped_column(String(128))
     dedupe_key: Mapped[str] = mapped_column(String(128))
     raw_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    intake_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    source_import_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -94,7 +103,32 @@ class JobPosting(Base):
     __table_args__ = (
         Index("ix_job_dedupe_key", "dedupe_key"),
         Index("ix_job_description_hash", "description_hash"),
+        Index("ix_job_source_import_key", "source_import_key", unique=True),
+        Index("ix_job_company_apply_url", "company_apply_url"),
     )
+
+
+class ReferralContact(Base):
+    """Referral network contact enrichment (not a job posting)."""
+
+    __tablename__ = "referral_contacts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=make_uuid)
+    company_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("companies.id"), nullable=True
+    )
+    company_name_raw: Mapped[str] = mapped_column(String(255))
+    contact_name: Mapped[str] = mapped_column(String(255))
+    position: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    team: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    locations: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    alternate_location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_import_key: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    company: Mapped[Company | None] = relationship("Company")
 
 
 class JobAssessment(Base):
