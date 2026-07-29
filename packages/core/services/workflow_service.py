@@ -318,20 +318,28 @@ def run_demo_loop(session: Session) -> dict[str, str]:
 
 
 def format_job_summary(session: Session, job_id: str) -> str:
-    jp = session.query(JobPosting).filter(JobPosting.id == job_id).one_or_none()
-    if jp is None:
+    from packages.core.services.job_search_service import job_detail_with_ranking
+
+    try:
+        detail = job_detail_with_ranking(session, job_id)
+    except LookupError:
         raise JobNotFoundError(job_id)
-    company = jp.company.canonical_name if jp.company else "Unknown"
-    lifecycle = compute_job_lifecycle(session, job_id)
+    jp = detail["job"]
     fit = fit_service.get_fit_result(session, job_id)
     app = application_service.get_application_for_job(session, job_id)
     ref = session.query(ReferralTask).filter(ReferralTask.job_posting_id == job_id).one_or_none()
     lines = [
         f"Job: {jp.title}",
-        f"Company: {company}",
+        f"Company: {detail['company_name']}",
+        f"Source: {jp.source_name or jp.source}",
         f"Status: {jp.status}",
-        f"Lifecycle: {lifecycle}",
+        f"Lifecycle: {compute_job_lifecycle(session, job_id)}",
+        f"Rank: {detail['rank_score']} ({', '.join(detail['rank_reasons'][:5])})",
     ]
+    if detail["is_target_company"]:
+        lines.append(f"Target company: {detail['target_company_name']}")
+    if detail["referral_contact_count"]:
+        lines.append(f"Referral contacts: {detail['referral_contact_count']}")
     if fit:
         lines.append(f"Fit track: {fit.recommended_track} ({fit.readiness_status})")
         lines.append(f"Next action: {fit.next_action}")

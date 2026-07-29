@@ -25,9 +25,13 @@ alembic/versions/__pycache__/
 
 # Tests
 .pytest_cache/
-
-# Local pytest test DB
 .pytest_test_db.sqlite
+
+# Local job-search inputs (keep private exports out of git)
+sheets/*.csv
+sheets/*.xlsx
+sheets/.DS_Store
+
 
 # Do not commit any personal resume or candidate private docs
 data/candidate_resume*/

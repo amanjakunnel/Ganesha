@@ -55,6 +55,16 @@ After `make migrate`, run the end-to-end demo workflow:
    .venv/bin/python -m apps.cli.main workflow queue
    .venv/bin/python -m apps.cli.main decisions list
 
+Job search imports (place source files under `sheets/` locally):
+
+   .venv/bin/python -m apps.cli.main jobs import-sheets
+   .venv/bin/python -m apps.cli.main jobs queue --target-only
+   .venv/bin/python -m apps.cli.main jobs queue --referral-only
+   .venv/bin/python -m apps.cli.main jobs show <job_id>
+
+Supported inputs: LinkedIn scraper CSV, Symplicity manual XLSX, referral contacts XLSX.
+Ranking is deterministic (source priority, freshness, track fit, early-career vs senior/clearance signals, target companies, referral matches).
+
 Optional Telegram operator console (requires TELEGRAM_BOT_TOKEN in `.env`):
 
    .venv/bin/python -m apps.cli.main telegram run
