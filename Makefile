@@ -47,7 +47,7 @@ sheets-sync:
 	$(VENV)/bin/python -m apps.cli.main
 
 db-doctor:
-	$(VENV)/bin/python -m apps.cli.main db-doctor
+	$(VENV)/bin/python -m apps.cli.main db doctor
 
 db-reset-local:
 	$(VENV)/bin/python -m apps.cli.main db-reset-local --yes

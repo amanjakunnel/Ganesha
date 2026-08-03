@@ -7,7 +7,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 from sqlalchemy.engine.url import make_url
 
-TELEGRAM_TOKEN_PLACEHOLDERS = frozenset({"", "your_bot_token_here", "changeme", "replace_me"})
+TELEGRAM_TOKEN_PLACEHOLDERS = frozenset(
+    {"", "your_bot_token_here", "changeme", "replace_me"}
+)
 
 
 class Settings(BaseSettings):
@@ -27,8 +29,11 @@ class Settings(BaseSettings):
     telegram_allowed_user_id: Optional[int] = None
     telegram_allowed_chat_id: Optional[int] = None
     telegram_chat_id: Optional[int] = None  # legacy alias for TELEGRAM_CHAT_ID
+    telegram_debug: bool = False
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
 
     @model_validator(mode="after")
     def _apply_legacy_telegram_aliases(self) -> Self:

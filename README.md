@@ -40,10 +40,13 @@ Quick start (macOS)
 3. Start local Postgres (docker-compose):
    docker-compose up -d
 
-4. Initialize DB and run migrations:
+4. Verify database connectivity:
+   .venv/bin/python -m apps.cli.main db doctor
+
+5. Initialize DB and run migrations:
    make migrate
 
-5. Run tests:
+6. Run tests:
    make test
 
 Product loop (local)
@@ -81,3 +84,32 @@ make migrate
 .venv/bin/python -m alembic current
 
 (Ensure .venv is created with Python 3.12 and activated when running alembic directly.)
+
+Local database recovery
+-----------------------
+If `db doctor` reports password authentication failure, the Postgres Docker volume was likely
+initialized with different credentials than your current `.env`. Changing `.env` alone does not
+update an existing volume.
+
+Diagnose:
+
+   .venv/bin/python -m apps.cli.main db doctor
+
+When local data is disposable, reset the volume (this **deletes** the local database):
+
+   docker compose down -v
+   docker compose up -d
+
+Then rebuild schema and reload data:
+
+   .venv/bin/python -m apps.cli.main db-reset-local --yes
+   .venv/bin/python -m apps.cli.main jobs import-sheets
+   .venv/bin/python -m apps.cli.main jobs queue --limit 10
+
+Happy path after a clean local setup:
+
+   .venv/bin/python -m apps.cli.main db doctor
+   .venv/bin/python -m apps.cli.main db-reset-local --yes
+   .venv/bin/python -m apps.cli.main jobs import-sheets
+   .venv/bin/python -m apps.cli.main jobs queue --limit 10
+   .venv/bin/python -m apps.cli.main telegram run

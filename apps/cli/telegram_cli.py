@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from typing import Any, Callable
 import typer
 from sqlalchemy.orm import Session
 
@@ -15,11 +15,46 @@ from packages.core.services.telegram import (
     extract_identity_from_update,
     is_authorized,
 )
+from packages.core.services.db_health import (
+    TELEGRAM_DB_UNAVAILABLE_MESSAGE,
+    is_database_unavailable,
+)
 from packages.core.settings import settings
 
 logger = logging.getLogger(__name__)
 
 telegram_app = typer.Typer(help="Telegram decision adapter commands")
+
+
+def _log_handler_error(exc: Exception, *, context: str) -> None:
+    if settings.telegram_debug:
+        logger.exception("%s", context)
+    else:
+        logger.error("%s: %s", context, exc.__class__.__name__)
+
+
+def _notify_db_unavailable(client: TelegramBotClient, chat_id: int | None) -> None:
+    if chat_id is not None:
+        client.send_message(chat_id, TELEGRAM_DB_UNAVAILABLE_MESSAGE)
+
+
+def _with_db_session(
+    session: Session,
+    client: TelegramBotClient,
+    chat_id: int | None,
+    action: Callable[[], None],
+) -> None:
+    try:
+        action()
+    except Exception as exc:
+        session.rollback()
+        if is_database_unavailable(exc):
+            _log_handler_error(
+                exc, context="Database unavailable during Telegram command"
+            )
+            _notify_db_unavailable(client, chat_id)
+            return
+        raise
 
 
 def format_decision_message(d: DecisionRequest) -> str:
@@ -73,59 +108,83 @@ def handle_telegram_message(
             "/application &lt;id&gt; — application summary",
         )
     elif text.startswith("/decisions"):
-        pending = decision_service.list_pending_decisions(session)
-        if not pending:
-            client.send_message(chat_id, "No pending decisions.")
-            return
 
-        for d in pending:
-            buttons = [
-                {"text": opt, "callback_data": f"resolve:{d.id}:{opt}"}
-                for opt in (d.options_json or [])
-            ]
-            markup = {"inline_keyboard": [buttons]} if buttons else None
-            client.send_message(chat_id, format_decision_message(d), reply_markup=markup)
+        def _do() -> None:
+            pending = decision_service.list_pending_decisions(session)
+            if not pending:
+                client.send_message(chat_id, "No pending decisions.")
+                return
+            for d in pending:
+                buttons = [
+                    {"text": opt, "callback_data": f"resolve:{d.id}:{opt}"}
+                    for opt in (d.options_json or [])
+                ]
+                markup = {"inline_keyboard": [buttons]} if buttons else None
+                client.send_message(
+                    chat_id, format_decision_message(d), reply_markup=markup
+                )
+
+        _with_db_session(session, client, chat_id, _do)
     elif text.startswith("/queue"):
-        items = workflow_service.list_actionable_queue(session, limit=10)
-        if not items:
-            client.send_message(chat_id, "Actionable queue is empty.")
-            return
-        lines = ["<b>Actionable queue</b>"]
-        for item in items:
-            lines.append(
-                f"• <code>{item.job_id}</code> [{item.lifecycle}] {item.company}: {item.title[:40]}"
-            )
-        client.send_message(chat_id, "\n".join(lines))
+
+        def _do() -> None:
+            items = workflow_service.list_actionable_queue(session, limit=10)
+            if not items:
+                client.send_message(chat_id, "Actionable queue is empty.")
+                return
+            lines = ["<b>Actionable queue</b>"]
+            for item in items:
+                lines.append(
+                    f"• <code>{item.job_id}</code> [{item.lifecycle}] {item.company}: {item.title[:40]}"
+                )
+            client.send_message(chat_id, "\n".join(lines))
+
+        _with_db_session(session, client, chat_id, _do)
     elif text.startswith("/job"):
         parts = text.split(None, 1)
         if len(parts) < 2:
             client.send_message(chat_id, "Usage: /job <id>")
             return
         job_id = parts[1].strip()
-        try:
-            summary = workflow_service.format_job_summary(session, job_id)
+
+        def _do() -> None:
+            try:
+                summary = workflow_service.format_job_summary(session, job_id)
+            except JobNotFoundError:
+                client.send_message(chat_id, "Job not found.")
+                return
             client.send_message(chat_id, f"<pre>{summary}</pre>")
-        except JobNotFoundError:
-            client.send_message(chat_id, "Job not found.")
+
+        _with_db_session(session, client, chat_id, _do)
     elif text.startswith("/application"):
         parts = text.split(None, 1)
         if len(parts) < 2:
             client.send_message(chat_id, "Usage: /application <id>")
             return
         app_id = parts[1].strip()
-        try:
-            summary = workflow_service.format_application_summary(session, app_id)
+
+        def _do() -> None:
+            try:
+                summary = workflow_service.format_application_summary(session, app_id)
+            except Exception:
+                client.send_message(chat_id, "Application not found.")
+                return
             client.send_message(chat_id, f"<pre>{summary}</pre>")
-        except Exception:
-            client.send_message(chat_id, "Application not found.")
+
+        _with_db_session(session, client, chat_id, _do)
     elif text.startswith("/decision"):
         parts = text.split(None, 1)
         if len(parts) < 2:
             client.send_message(chat_id, "Usage: /decision &lt;id&gt;")
             return
         decision_id = parts[1].strip()
-        try:
-            d = decision_service.get_decision_request(session, decision_id)
+
+        def _do() -> None:
+            try:
+                d = decision_service.get_decision_request(session, decision_id)
+            except decision_service.DecisionNotFoundError:
+                client.send_message(chat_id, "Decision not found.")
+                return
             if d.status != "pending":
                 resolved_info = (
                     f"\n\nResolved: <b>{d.selected_action}</b> by {d.resolved_by}"
@@ -137,9 +196,11 @@ def handle_telegram_message(
                     for opt in (d.options_json or [])
                 ]
                 markup = {"inline_keyboard": [buttons]} if buttons else None
-                client.send_message(chat_id, format_decision_message(d), reply_markup=markup)
-        except decision_service.DecisionNotFoundError:
-            client.send_message(chat_id, "Decision not found.")
+                client.send_message(
+                    chat_id, format_decision_message(d), reply_markup=markup
+                )
+
+        _with_db_session(session, client, chat_id, _do)
 
 
 def handle_telegram_callback(
@@ -161,7 +222,9 @@ def handle_telegram_callback(
     chat_id = message.get("chat", {}).get("id")
 
     if not is_authorized(user_id, chat_id, allowed_user, allowed_chat):
-        client.answer_callback_query(callback_query_id, text="Unauthorized.", show_alert=True)
+        client.answer_callback_query(
+            callback_query_id, text="Unauthorized.", show_alert=True
+        )
         return
 
     data = callback_query.get("data", "")
@@ -173,24 +236,23 @@ def handle_telegram_callback(
         try:
             d = decision_service.get_decision_request(session, decision_id)
             if d.status != "pending":
-                # Already handled - answer callback with a pop-up and no duplicate audit events
-                client.answer_callback_query(callback_query_id, text="Already handled.", show_alert=True)
-                # Also remove buttons from the message if possible
+                client.answer_callback_query(
+                    callback_query_id, text="Already handled.", show_alert=True
+                )
                 if message and chat_id:
                     msg_id = message.get("message_id")
                     if msg_id:
                         orig_text = message.get("text", "")
-                        resolved_info = (
-                            f"\n\nResolved: <b>{d.selected_action}</b> by {d.resolved_by}"
-                        )
+                        resolved_info = f"\n\nResolved: <b>{d.selected_action}</b> by {d.resolved_by}"
                         if resolved_info not in orig_text:
                             new_text = orig_text + resolved_info
                         else:
                             new_text = orig_text
-                        client.edit_message_text(chat_id, msg_id, new_text, reply_markup=None)
+                        client.edit_message_text(
+                            chat_id, msg_id, new_text, reply_markup=None
+                        )
                 return
 
-            # Resolve using service
             workflow_service.resolve_decision_with_effects(
                 session,
                 decision_id=decision_id,
@@ -201,17 +263,34 @@ def handle_telegram_callback(
 
             client.answer_callback_query(callback_query_id, text=f"Resolved: {action}")
 
-            # Update the original message to remove buttons and show resolution
             if message and chat_id:
                 msg_id = message.get("message_id")
                 if msg_id:
                     orig_text = message.get("text", "")
-                    new_text = orig_text + f"\n\nResolved: <b>{action}</b> by telegram:{user_id}"
-                    client.edit_message_text(chat_id, msg_id, new_text, reply_markup=None)
+                    new_text = (
+                        orig_text
+                        + f"\n\nResolved: <b>{action}</b> by telegram:{user_id}"
+                    )
+                    client.edit_message_text(
+                        chat_id, msg_id, new_text, reply_markup=None
+                    )
 
-        except Exception as e:
+        except Exception as exc:
+            session.rollback()
+            if is_database_unavailable(exc):
+                _log_handler_error(
+                    exc, context="Database unavailable during Telegram callback"
+                )
+                client.answer_callback_query(
+                    callback_query_id,
+                    text="Database unavailable. Run db doctor locally.",
+                    show_alert=True,
+                )
+                return
             logger.exception("Error processing callback query")
-            client.answer_callback_query(callback_query_id, text=f"Error: {e}", show_alert=True)
+            client.answer_callback_query(
+                callback_query_id, text="Request failed.", show_alert=True
+            )
 
 
 @telegram_app.command("doctor")
@@ -224,8 +303,12 @@ def telegram_doctor() -> None:
     typer.echo(f"TELEGRAM_ALLOWED_CHAT_ID: {restrictions['allowed_chat_id']}")
     if not configured:
         typer.echo("")
-        typer.echo("Telegram is optional. Other CLI commands and tests do not require it.")
-        typer.echo("Setup: copy .env.example to .env, set TELEGRAM_BOT_TOKEN from @BotFather.")
+        typer.echo(
+            "Telegram is optional. Other CLI commands and tests do not require it."
+        )
+        typer.echo(
+            "Setup: copy .env.example to .env, set TELEGRAM_BOT_TOKEN from @BotFather."
+        )
         typer.echo("Then run: python -m apps.cli.main telegram discover-ids")
         raise typer.Exit(code=1)
     typer.secho("Telegram credentials look configured.", fg=typer.colors.GREEN)
@@ -268,8 +351,13 @@ def telegram_discover_ids() -> None:
 def run_telegram_bot() -> None:
     """Start the Telegram decision adapter using long polling."""
     if not settings.telegram_token_configured():
-        typer.secho("Error: TELEGRAM_BOT_TOKEN is not set or is still a placeholder.", fg=typer.colors.RED)
-        typer.echo("Configure your local .env (see .env.example) and run: telegram doctor")
+        typer.secho(
+            "Error: TELEGRAM_BOT_TOKEN is not set or is still a placeholder.",
+            fg=typer.colors.RED,
+        )
+        typer.echo(
+            "Configure your local .env (see .env.example) and run: telegram doctor"
+        )
         raise typer.Exit(code=1)
 
     token = settings.telegram_bot_token
@@ -301,13 +389,37 @@ def run_telegram_bot() -> None:
                         offset = update_id + 1
 
                     if "message" in update:
-                        handle_telegram_message(
-                            client, update["message"], session, allowed_user, allowed_chat
-                        )
+                        try:
+                            handle_telegram_message(
+                                client,
+                                update["message"],
+                                session,
+                                allowed_user,
+                                allowed_chat,
+                            )
+                        except Exception as exc:
+                            session.rollback()
+                            if not is_database_unavailable(exc):
+                                _log_handler_error(
+                                    exc,
+                                    context="Unexpected Telegram message handler error",
+                                )
                     elif "callback_query" in update:
-                        handle_telegram_callback(
-                            client, update["callback_query"], session, allowed_user, allowed_chat
-                        )
+                        try:
+                            handle_telegram_callback(
+                                client,
+                                update["callback_query"],
+                                session,
+                                allowed_user,
+                                allowed_chat,
+                            )
+                        except Exception as exc:
+                            session.rollback()
+                            if not is_database_unavailable(exc):
+                                _log_handler_error(
+                                    exc,
+                                    context="Unexpected Telegram callback handler error",
+                                )
             except KeyboardInterrupt:
                 typer.echo("\nStopping Telegram bot...")
                 break

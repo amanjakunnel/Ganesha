@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import pytest
+from sqlalchemy.exc import OperationalError
+
 from packages.core.db import SessionLocal, get_engine
 from packages.core.domain.models import AuditEvent, Base
 from packages.core.services import decision_service
@@ -156,7 +159,11 @@ def test_handle_telegram_message_decision_detail() -> None:
 
         handle_telegram_message(
             client,
-            {"from": {"id": 12345}, "chat": {"id": 67890}, "text": "/decision non_existent_id"},
+            {
+                "from": {"id": 12345},
+                "chat": {"id": 67890},
+                "text": "/decision non_existent_id",
+            },
             session,
             12345,
             67890,
@@ -208,18 +215,23 @@ def test_handle_telegram_callback_resolution_and_duplicate() -> None:
 
         audit_count_before = (
             session.query(AuditEvent)
-            .filter(AuditEvent.entity_type == "decision_request", AuditEvent.entity_id == d.id)
+            .filter(
+                AuditEvent.entity_type == "decision_request",
+                AuditEvent.entity_id == d.id,
+            )
             .count()
         )
 
         handle_telegram_callback(client, cb, session, 12345, 67890)
 
-        answer = next(c for c in transport.calls if c[0] == "answerCallbackQuery")
-        payload = answer[1] or {}
-        assert payload.get("text") == "Already handled."
+        answer_calls = [c for c in transport.calls if c[0] == "answerCallbackQuery"]
+        assert answer_calls[-1][1].get("text") == "Already handled."
         audit_count_after = (
             session.query(AuditEvent)
-            .filter(AuditEvent.entity_type == "decision_request", AuditEvent.entity_id == d.id)
+            .filter(
+                AuditEvent.entity_type == "decision_request",
+                AuditEvent.entity_id == d.id,
+            )
             .count()
         )
         assert audit_count_before == audit_count_after
@@ -245,7 +257,11 @@ def test_handle_unauthorized_user() -> None:
             {
                 "id": "query_unauth",
                 "from": {"id": 99999},
-                "message": {"message_id": 555, "chat": {"id": 67890}, "text": "Any text"},
+                "message": {
+                    "message_id": 555,
+                    "chat": {"id": 67890},
+                    "text": "Any text",
+                },
                 "data": "resolve:some_id:approve",
             },
             session,
@@ -275,4 +291,82 @@ def test_recording_transport_send_message() -> None:
     transport = RecordingTelegramTransport()
     client = TelegramBotClient(transport)
     client.send_message(1, "hello")
-    assert transport.calls == [("sendMessage", {"chat_id": 1, "text": "hello", "parse_mode": "HTML"})]
+    assert transport.calls == [
+        ("sendMessage", {"chat_id": 1, "text": "hello", "parse_mode": "HTML"})
+    ]
+
+
+def test_handle_telegram_message_queue_db_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from packages.core.services.db_health import TELEGRAM_DB_UNAVAILABLE_MESSAGE
+
+    def _raise_db_error(_session: object, limit: int = 10) -> None:
+        raise OperationalError(
+            "SELECT", {}, Exception("password authentication failed for user")
+        )
+
+    monkeypatch.setattr(
+        "apps.cli.telegram_cli.workflow_service.list_actionable_queue",
+        _raise_db_error,
+    )
+
+    client = _mock_client()
+    session = SessionLocal()
+    try:
+        handle_telegram_message(
+            client,
+            {"from": {"id": 12345}, "chat": {"id": 67890}, "text": "/queue"},
+            session,
+            12345,
+            67890,
+        )
+        texts = _sent_texts(client)
+        assert len(texts) == 1
+        assert texts[0] == TELEGRAM_DB_UNAVAILABLE_MESSAGE
+        assert "password" not in texts[0].lower()
+        assert "traceback" not in texts[0].lower()
+    finally:
+        session.close()
+
+
+def test_handle_telegram_message_queue_db_unavailable_then_start_works(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from packages.core.services.db_health import TELEGRAM_DB_UNAVAILABLE_MESSAGE
+
+    calls = {"n": 0}
+
+    def _maybe_fail(_session: object, limit: int = 10) -> list[object]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OperationalError("SELECT", {}, Exception("connection refused"))
+        return []
+
+    monkeypatch.setattr(
+        "apps.cli.telegram_cli.workflow_service.list_actionable_queue",
+        _maybe_fail,
+    )
+
+    client = _mock_client()
+    session = SessionLocal()
+    try:
+        handle_telegram_message(
+            client,
+            {"from": {"id": 12345}, "chat": {"id": 67890}, "text": "/queue"},
+            session,
+            12345,
+            67890,
+        )
+        handle_telegram_message(
+            client,
+            {"from": {"id": 12345}, "chat": {"id": 67890}, "text": "/start"},
+            session,
+            12345,
+            67890,
+        )
+        texts = _sent_texts(client)
+        assert TELEGRAM_DB_UNAVAILABLE_MESSAGE in texts[0]
+        assert "67890" in texts[1]
+    finally:
+        session.close()

@@ -53,6 +53,20 @@ Telegram is optional. Job search, fit, applications, and tests work without any 
 
 6. Restart `telegram run` after changing `.env`.
 
+## Database dependency
+
+Commands `/decisions`, `/queue`, `/job`, and `/application` require a working local Postgres
+connection. If the database is unavailable, the bot replies with a short message and keeps polling;
+it does not print stack traces to Telegram.
+
+Diagnose locally:
+
+```bash
+.venv/bin/python -m apps.cli.main db doctor
+```
+
+Set `TELEGRAM_DEBUG=1` in `.env` for full tracebacks in local polling logs only.
+
 ## Commands
 
 | Command | Purpose |

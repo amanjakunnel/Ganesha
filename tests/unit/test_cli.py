@@ -65,6 +65,13 @@ def test_jobs_help_lists_import_csv() -> None:
     assert "import-csv" in result.output
 
 
+def test_db_help_lists_subcommands() -> None:
+    result = runner.invoke(app, ["db", "--help"])
+    assert result.exit_code == 0
+    assert "doctor" in result.stdout
+    assert "reset-local" in result.stdout
+
+
 def test_destructive_command_requires_confirm() -> None:
     """Test that destructive commands require --confirm flag."""
     # Test approve without confirm - should exit with code 2
