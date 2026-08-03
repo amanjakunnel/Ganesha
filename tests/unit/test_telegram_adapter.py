@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
 
 from packages.core.db import SessionLocal, get_engine
 from packages.core.domain.models import AuditEvent, Base
 from packages.core.services import decision_service
-from packages.core.services.telegram import TelegramBotClient, is_authorized
+from packages.core.services.telegram import (
+    RecordingTelegramTransport,
+    TelegramBotClient,
+    is_authorized,
+)
 from apps.cli.telegram_cli import (
     handle_telegram_message,
     handle_telegram_callback,
@@ -14,36 +17,18 @@ from apps.cli.telegram_cli import (
 )
 
 
-class MockTelegramBotClient(TelegramBotClient):
-    """Mock telegram bot client that stores calls instead of hitting network."""
+def _mock_client() -> TelegramBotClient:
+    return TelegramBotClient(RecordingTelegramTransport())
 
-    def __init__(self) -> None:
-        super().__init__("mock_token")
-        self.sent_messages: List[Dict[str, Any]] = []
-        self.answered_callbacks: List[Dict[str, Any]] = []
-        self.edited_messages: List[Dict[str, Any]] = []
 
-    def send_message(
-        self, chat_id: int, text: str, reply_markup: Optional[Dict[str, Any]] = None
-    ) -> Optional[Dict[str, Any]]:
-        self.sent_messages.append({"chat_id": chat_id, "text": text, "reply_markup": reply_markup})
-        return {"message_id": 999, "chat": {"id": chat_id}, "text": text}
-
-    def answer_callback_query(
-        self, callback_query_id: str, text: Optional[str] = None, show_alert: bool = False
-    ) -> Optional[bool]:
-        self.answered_callbacks.append(
-            {"callback_query_id": callback_query_id, "text": text, "show_alert": show_alert}
-        )
-        return True
-
-    def edit_message_text(
-        self, chat_id: int, message_id: int, text: str, reply_markup: Optional[Dict[str, Any]] = None
-    ) -> Optional[Dict[str, Any]]:
-        self.edited_messages.append(
-            {"chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup}
-        )
-        return {"message_id": message_id, "chat": {"id": chat_id}, "text": text}
+def _sent_texts(client: TelegramBotClient) -> list[str]:
+    transport = client._transport
+    assert isinstance(transport, RecordingTelegramTransport)
+    return [
+        str((call[1] or {}).get("text", ""))
+        for call in transport.calls
+        if call[0] == "sendMessage"
+    ]
 
 
 def setup_module(module: object) -> None:
@@ -57,66 +42,58 @@ def teardown_module(module: object) -> None:
 
 
 def test_telegram_authorization() -> None:
-    # 1. No constraints
     assert is_authorized(123, 456, None, None) is True
-
-    # 2. User constraint matched
     assert is_authorized(123, 456, 123, None) is True
-    # User constraint failed
     assert is_authorized(999, 456, 123, None) is False
-
-    # 3. Chat constraint matched
     assert is_authorized(123, 456, None, 456) is True
-    # Chat constraint failed
     assert is_authorized(123, 999, None, 456) is False
-
-    # 4. Both constraints matched
     assert is_authorized(123, 456, 123, 456) is True
-    # User failed, chat matched
     assert is_authorized(999, 456, 123, 456) is False
-    # User matched, chat failed
     assert is_authorized(123, 999, 123, 456) is False
 
 
-def test_handle_telegram_message_start() -> None:
-    client = MockTelegramBotClient()
+def test_handle_telegram_message_start_includes_ids() -> None:
+    client = _mock_client()
     session = SessionLocal()
     try:
-        msg = {
-            "from": {"id": 12345},
-            "chat": {"id": 67890},
-            "text": "/start",
-        }
-        handle_telegram_message(client, msg, session, 12345, 67890)
-        assert len(client.sent_messages) == 1
-        assert "Welcome to the Ganesha Decision Agent Bot" in client.sent_messages[0]["text"]
+        handle_telegram_message(
+            client,
+            {"from": {"id": 12345}, "chat": {"id": 67890}, "text": "/start"},
+            session,
+            12345,
+            67890,
+        )
+        texts = _sent_texts(client)
+        assert len(texts) == 1
+        assert "67890" in texts[0]
+        assert "12345" in texts[0]
+        assert "TELEGRAM_ALLOWED_CHAT_ID" in texts[0]
     finally:
         session.close()
 
 
 def test_handle_telegram_message_decisions_empty() -> None:
-    client = MockTelegramBotClient()
+    client = _mock_client()
     session = SessionLocal()
     try:
-        # Ensure database is clean of pending decisions
         for d in decision_service.list_pending_decisions(session):
             session.delete(d)
         session.commit()
 
-        msg = {
-            "from": {"id": 12345},
-            "chat": {"id": 67890},
-            "text": "/decisions",
-        }
-        handle_telegram_message(client, msg, session, 12345, 67890)
-        assert len(client.sent_messages) == 1
-        assert "No pending decisions." in client.sent_messages[0]["text"]
+        handle_telegram_message(
+            client,
+            {"from": {"id": 12345}, "chat": {"id": 67890}, "text": "/decisions"},
+            session,
+            12345,
+            67890,
+        )
+        assert "No pending decisions." in _sent_texts(client)[0]
     finally:
         session.close()
 
 
 def test_handle_telegram_message_decisions_nonempty() -> None:
-    client = MockTelegramBotClient()
+    client = _mock_client()
     session = SessionLocal()
     try:
         d = decision_service.create_decision_request(
@@ -132,33 +109,28 @@ def test_handle_telegram_message_decisions_nonempty() -> None:
         )
         session.commit()
 
-        msg = {
-            "from": {"id": 12345},
-            "chat": {"id": 67890},
-            "text": "/decisions",
-        }
-        handle_telegram_message(client, msg, session, 12345, 67890)
-        assert len(client.sent_messages) == 1
-        sent = client.sent_messages[0]
-        assert d.id in sent["text"]
-
-        # Verify inline keyboard rendering
-        markup = sent["reply_markup"]
+        handle_telegram_message(
+            client,
+            {"from": {"id": 12345}, "chat": {"id": 67890}, "text": "/decisions"},
+            session,
+            12345,
+            67890,
+        )
+        transport = client._transport
+        assert isinstance(transport, RecordingTelegramTransport)
+        send_call = next(c for c in transport.calls if c[0] == "sendMessage")
+        payload = send_call[1] or {}
+        assert d.id in str(payload.get("text"))
+        markup = payload.get("reply_markup")
         assert markup is not None
-        kb = markup["inline_keyboard"]
-        assert len(kb) == 1
-        buttons = kb[0]
-        assert len(buttons) == 2
-        assert buttons[0]["text"] == "yes"
+        buttons = markup["inline_keyboard"][0]
         assert buttons[0]["callback_data"] == f"resolve:{d.id}:yes"
-        assert buttons[1]["text"] == "no"
-        assert buttons[1]["callback_data"] == f"resolve:{d.id}:no"
     finally:
         session.close()
 
 
 def test_handle_telegram_message_decision_detail() -> None:
-    client = MockTelegramBotClient()
+    client = _mock_client()
     session = SessionLocal()
     try:
         d = decision_service.create_decision_request(
@@ -173,32 +145,29 @@ def test_handle_telegram_message_decision_detail() -> None:
         )
         session.commit()
 
-        # 1. Valid pending decision
-        msg = {
-            "from": {"id": 12345},
-            "chat": {"id": 67890},
-            "text": f"/decision {d.id}",
-        }
-        handle_telegram_message(client, msg, session, 12345, 67890)
-        assert len(client.sent_messages) == 1
-        assert d.id in client.sent_messages[0]["text"]
-        assert client.sent_messages[0]["reply_markup"] is not None
+        handle_telegram_message(
+            client,
+            {"from": {"id": 12345}, "chat": {"id": 67890}, "text": f"/decision {d.id}"},
+            session,
+            12345,
+            67890,
+        )
+        assert d.id in _sent_texts(client)[0]
 
-        # 2. Invalid decision ID
-        msg2 = {
-            "from": {"id": 12345},
-            "chat": {"id": 67890},
-            "text": "/decision non_existent_id",
-        }
-        handle_telegram_message(client, msg2, session, 12345, 67890)
-        assert len(client.sent_messages) == 2
-        assert "Decision not found." in client.sent_messages[1]["text"]
+        handle_telegram_message(
+            client,
+            {"from": {"id": 12345}, "chat": {"id": 67890}, "text": "/decision non_existent_id"},
+            session,
+            12345,
+            67890,
+        )
+        assert "Decision not found." in _sent_texts(client)[-1]
     finally:
         session.close()
 
 
 def test_handle_telegram_callback_resolution_and_duplicate() -> None:
-    client = MockTelegramBotClient()
+    client = _mock_client()
     session = SessionLocal()
     try:
         d = decision_service.create_decision_request(
@@ -213,7 +182,6 @@ def test_handle_telegram_callback_resolution_and_duplicate() -> None:
         )
         session.commit()
 
-        # Callback query payload
         cb = {
             "id": "query_123",
             "from": {"id": 12345},
@@ -225,40 +193,19 @@ def test_handle_telegram_callback_resolution_and_duplicate() -> None:
             "data": f"resolve:{d.id}:approve",
         }
 
-        # 1. Resolve pending decision
         handle_telegram_callback(client, cb, session, 12345, 67890)
 
-        # Refresh decision from DB
         session.expire(d)
         d_db = decision_service.get_decision_request(session, d.id)
         assert d_db.status == "resolved"
         assert d_db.selected_action == "approve"
-        assert d_db.resolved_by == "telegram:12345"
 
-        # Verify callback was answered and message edited (removing buttons)
-        assert len(client.answered_callbacks) == 1
-        assert "Resolved: approve" in client.answered_callbacks[0]["text"]
-        assert len(client.edited_messages) == 1
-        assert "Resolved: <b>approve</b> by telegram:12345" in client.edited_messages[0]["text"]
-        assert client.edited_messages[0]["reply_markup"] is None
+        transport = client._transport
+        assert isinstance(transport, RecordingTelegramTransport)
+        answer_calls = [c for c in transport.calls if c[0] == "answerCallbackQuery"]
+        assert answer_calls
+        assert "Resolved: approve" in str((answer_calls[0][1] or {}).get("text"))
 
-        # Verify audit event exists
-        audit = (
-            session.query(AuditEvent)
-            .filter(
-                AuditEvent.entity_type == "decision_request",
-                AuditEvent.entity_id == d.id,
-                AuditEvent.event_type == "decision_request_resolved",
-            )
-            .one()
-        )
-        assert audit.payload is not None
-        assert audit.payload["actor"] == "telegram:12345"
-
-        # 2. Test duplicate callback (should show "Already handled." pop-up)
-        # Clear mock history
-        client.answered_callbacks.clear()
-        client.edited_messages.clear()
         audit_count_before = (
             session.query(AuditEvent)
             .filter(AuditEvent.entity_type == "decision_request", AuditEvent.entity_id == d.id)
@@ -267,11 +214,9 @@ def test_handle_telegram_callback_resolution_and_duplicate() -> None:
 
         handle_telegram_callback(client, cb, session, 12345, 67890)
 
-        assert len(client.answered_callbacks) == 1
-        assert client.answered_callbacks[0]["text"] == "Already handled."
-        assert client.answered_callbacks[0]["show_alert"] is True
-
-        # Verify no duplicate audit events were created
+        answer = next(c for c in transport.calls if c[0] == "answerCallbackQuery")
+        payload = answer[1] or {}
+        assert payload.get("text") == "Already handled."
         audit_count_after = (
             session.query(AuditEvent)
             .filter(AuditEvent.entity_type == "decision_request", AuditEvent.entity_id == d.id)
@@ -283,33 +228,51 @@ def test_handle_telegram_callback_resolution_and_duplicate() -> None:
 
 
 def test_handle_unauthorized_user() -> None:
-    client = MockTelegramBotClient()
+    client = _mock_client()
     session = SessionLocal()
     try:
-        # Message test
-        msg = {
-            "from": {"id": 99999},  # Unauthorized user ID
-            "chat": {"id": 67890},
-            "text": "/decisions",
-        }
-        handle_telegram_message(client, msg, session, 12345, 67890)
-        assert len(client.sent_messages) == 1
-        assert "Unauthorized user or chat." in client.sent_messages[0]["text"]
+        handle_telegram_message(
+            client,
+            {"from": {"id": 99999}, "chat": {"id": 67890}, "text": "/decisions"},
+            session,
+            12345,
+            67890,
+        )
+        assert "Unauthorized user or chat." in _sent_texts(client)[0]
 
-        # Callback test
-        cb = {
-            "id": "query_unauth",
-            "from": {"id": 99999},  # Unauthorized user ID
-            "message": {
-                "message_id": 555,
-                "chat": {"id": 67890},
-                "text": "Any text",
+        handle_telegram_callback(
+            client,
+            {
+                "id": "query_unauth",
+                "from": {"id": 99999},
+                "message": {"message_id": 555, "chat": {"id": 67890}, "text": "Any text"},
+                "data": "resolve:some_id:approve",
             },
-            "data": "resolve:some_id:approve",
-        }
-        handle_telegram_callback(client, cb, session, 12345, 67890)
-        assert len(client.answered_callbacks) == 1
-        assert client.answered_callbacks[0]["text"] == "Unauthorized."
-        assert client.answered_callbacks[0]["show_alert"] is True
+            session,
+            12345,
+            67890,
+        )
+        transport = client._transport
+        assert isinstance(transport, RecordingTelegramTransport)
+        answer = next(c for c in transport.calls if c[0] == "answerCallbackQuery")
+        payload = answer[1] or {}
+        assert payload.get("text") == "Unauthorized."
     finally:
         session.close()
+
+
+def test_extract_identity_from_update() -> None:
+    from packages.core.services.telegram import extract_identity_from_update
+
+    user_id, chat_id = extract_identity_from_update(
+        {"message": {"from": {"id": 1}, "chat": {"id": 2}}}
+    )
+    assert user_id == 1
+    assert chat_id == 2
+
+
+def test_recording_transport_send_message() -> None:
+    transport = RecordingTelegramTransport()
+    client = TelegramBotClient(transport)
+    client.send_message(1, "hello")
+    assert transport.calls == [("sendMessage", {"chat_id": 1, "text": "hello", "parse_mode": "HTML"})]

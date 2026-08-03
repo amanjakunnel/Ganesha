@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Self
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 from sqlalchemy.engine.url import make_url
+
+TELEGRAM_TOKEN_PLACEHOLDERS = frozenset({"", "your_bot_token_here", "changeme", "replace_me"})
 
 
 class Settings(BaseSettings):
@@ -23,8 +26,33 @@ class Settings(BaseSettings):
     telegram_bot_token: Optional[str] = None
     telegram_allowed_user_id: Optional[int] = None
     telegram_allowed_chat_id: Optional[int] = None
+    telegram_chat_id: Optional[int] = None  # legacy alias for TELEGRAM_CHAT_ID
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    @model_validator(mode="after")
+    def _apply_legacy_telegram_aliases(self) -> Self:
+        if self.telegram_allowed_chat_id is None and self.telegram_chat_id is not None:
+            self.telegram_allowed_chat_id = self.telegram_chat_id
+        return self
+
+    def telegram_token_configured(self) -> bool:
+        token = (self.telegram_bot_token or "").strip()
+        return bool(token) and token not in TELEGRAM_TOKEN_PLACEHOLDERS
+
+    def telegram_operator_restrictions(self) -> dict[str, str]:
+        """Non-secret summary of Telegram auth constraints for doctor output."""
+        user = (
+            str(self.telegram_allowed_user_id)
+            if self.telegram_allowed_user_id is not None
+            else "not set (any user allowed)"
+        )
+        chat = (
+            str(self.telegram_allowed_chat_id)
+            if self.telegram_allowed_chat_id is not None
+            else "not set (any chat allowed)"
+        )
+        return {"allowed_user_id": user, "allowed_chat_id": chat}
 
     def sqlalchemy_url(self) -> URL:
         """Construct a SQLAlchemy URL from individual settings.

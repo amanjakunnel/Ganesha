@@ -10,7 +10,11 @@ from packages.core.db import SessionLocal
 from packages.core.domain.models import DecisionRequest
 from packages.core.services import decision_service, workflow_service
 from packages.core.services.job_service import JobNotFoundError
-from packages.core.services.telegram import TelegramBotClient, is_authorized
+from packages.core.services.telegram import (
+    TelegramBotClient,
+    extract_identity_from_update,
+    is_authorized,
+)
 from packages.core.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -55,13 +59,18 @@ def handle_telegram_message(
     if text.startswith("/start"):
         client.send_message(
             chat_id,
-            "Welcome to the Ganesha Decision Agent Bot!\n\n"
+            "Welcome to the Ganesha operator bot.\n\n"
+            f"<b>Your user ID:</b> <code>{user_id}</code>\n"
+            f"<b>Your chat ID:</b> <code>{chat_id}</code>\n\n"
+            "Add these to your local <code>.env</code> if you want to restrict access:\n"
+            f"<code>TELEGRAM_ALLOWED_USER_ID={user_id}</code>\n"
+            f"<code>TELEGRAM_ALLOWED_CHAT_ID={chat_id}</code>\n\n"
             "Commands:\n"
-            "/decisions - List pending decisions\n"
-            "/decision <id> - Show a specific decision\n"
-            "/queue - Actionable job queue\n"
-            "/job <id> - Job summary\n"
-            "/application <id> - Application summary",
+            "/decisions — pending decisions\n"
+            "/decision &lt;id&gt; — show one decision\n"
+            "/queue — actionable job queue\n"
+            "/job &lt;id&gt; — job summary\n"
+            "/application &lt;id&gt; — application summary",
         )
     elif text.startswith("/decisions"):
         pending = decision_service.list_pending_decisions(session)
@@ -205,25 +214,81 @@ def handle_telegram_callback(
             client.answer_callback_query(callback_query_id, text=f"Error: {e}", show_alert=True)
 
 
+@telegram_app.command("doctor")
+def telegram_doctor() -> None:
+    """Check Telegram configuration without contacting the Telegram API."""
+    configured = settings.telegram_token_configured()
+    typer.echo(f"TELEGRAM_BOT_TOKEN configured: {'yes' if configured else 'no'}")
+    restrictions = settings.telegram_operator_restrictions()
+    typer.echo(f"TELEGRAM_ALLOWED_USER_ID: {restrictions['allowed_user_id']}")
+    typer.echo(f"TELEGRAM_ALLOWED_CHAT_ID: {restrictions['allowed_chat_id']}")
+    if not configured:
+        typer.echo("")
+        typer.echo("Telegram is optional. Other CLI commands and tests do not require it.")
+        typer.echo("Setup: copy .env.example to .env, set TELEGRAM_BOT_TOKEN from @BotFather.")
+        typer.echo("Then run: python -m apps.cli.main telegram discover-ids")
+        raise typer.Exit(code=1)
+    typer.secho("Telegram credentials look configured.", fg=typer.colors.GREEN)
+
+
+@telegram_app.command("discover-ids")
+def telegram_discover_ids() -> None:
+    """Fetch recent updates and print user/chat IDs (run after sending /start to the bot)."""
+    if not settings.telegram_token_configured():
+        typer.secho("TELEGRAM_BOT_TOKEN is not configured.", fg=typer.colors.RED)
+        typer.echo("Set it in your local .env (see .env.example).")
+        raise typer.Exit(code=1)
+
+    token = settings.telegram_bot_token
+    assert token is not None
+    client = TelegramBotClient.from_token(token)
+    updates = client.get_updates(timeout=0)
+    if not updates:
+        typer.echo("No updates received.")
+        typer.echo("1. Start the bot: python -m apps.cli.main telegram run")
+        typer.echo("2. In Telegram, open your bot and send /start")
+        typer.echo("3. Re-run: python -m apps.cli.main telegram discover-ids")
+        raise typer.Exit(code=2)
+
+    seen: set[tuple[int | None, int | None]] = set()
+    for update in updates:
+        user_id, chat_id = extract_identity_from_update(update)
+        key = (user_id, chat_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        typer.echo(f"user_id={user_id} chat_id={chat_id}")
+    typer.echo("")
+    typer.echo("Copy the values into your local .env if you want restrictions:")
+    typer.echo("  TELEGRAM_ALLOWED_USER_ID=<user_id>")
+    typer.echo("  TELEGRAM_ALLOWED_CHAT_ID=<chat_id>")
+
+
 @telegram_app.command("run")
 def run_telegram_bot() -> None:
     """Start the Telegram decision adapter using long polling."""
-    token = settings.telegram_bot_token
-    if not token or token == "your_bot_token_here":
-        typer.secho("Error: TELEGRAM_BOT_TOKEN is not set or is invalid.", fg=typer.colors.RED)
+    if not settings.telegram_token_configured():
+        typer.secho("Error: TELEGRAM_BOT_TOKEN is not set or is still a placeholder.", fg=typer.colors.RED)
+        typer.echo("Configure your local .env (see .env.example) and run: telegram doctor")
         raise typer.Exit(code=1)
 
+    token = settings.telegram_bot_token
+    assert token is not None
     allowed_user = settings.telegram_allowed_user_id
     allowed_chat = settings.telegram_allowed_chat_id
 
     typer.echo("Starting Ganesha Telegram long-polling adapter...")
-    if allowed_user:
+    if allowed_user is not None:
         typer.echo(f"Allowed User ID: {allowed_user}")
-    if allowed_chat:
+    else:
+        typer.echo("Allowed User ID: any (set TELEGRAM_ALLOWED_USER_ID to restrict)")
+    if allowed_chat is not None:
         typer.echo(f"Allowed Chat ID: {allowed_chat}")
+    else:
+        typer.echo("Allowed Chat ID: any (set TELEGRAM_ALLOWED_CHAT_ID to restrict)")
 
-    client = TelegramBotClient(token)
-    offset = None
+    client = TelegramBotClient.from_token(token)
+    offset: int | None = None
 
     session = SessionLocal()
     try:

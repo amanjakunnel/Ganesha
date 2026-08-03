@@ -65,8 +65,9 @@ Job search imports (place source files under `sheets/` locally):
 Supported inputs: LinkedIn scraper CSV, Symplicity manual XLSX, referral contacts XLSX.
 Ranking is deterministic (source priority, freshness, track fit, early-career vs senior/clearance signals, target companies, referral matches).
 
-Optional Telegram operator console (requires TELEGRAM_BOT_TOKEN in `.env`):
+Optional Telegram operator console (requires local `.env`; see [docs/telegram-setup.md](docs/telegram-setup.md)):
 
+   .venv/bin/python -m apps.cli.main telegram doctor
    .venv/bin/python -m apps.cli.main telegram run
 
 See Makefile and docs/runbook.md for full commands and notes.
