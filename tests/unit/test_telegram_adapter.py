@@ -225,7 +225,8 @@ def test_handle_telegram_callback_resolution_and_duplicate() -> None:
         handle_telegram_callback(client, cb, session, 12345, 67890)
 
         answer_calls = [c for c in transport.calls if c[0] == "answerCallbackQuery"]
-        assert answer_calls[-1][1].get("text") == "Already handled."
+        payload = answer_calls[-1][1] or {}
+        assert payload.get("text") == "Already handled."
         audit_count_after = (
             session.query(AuditEvent)
             .filter(
@@ -307,7 +308,7 @@ def test_handle_telegram_message_queue_db_unavailable(
         )
 
     monkeypatch.setattr(
-        "apps.cli.telegram_cli.workflow_service.list_actionable_queue",
+        "packages.core.services.job_search_service.build_ranked_queue",
         _raise_db_error,
     )
 
@@ -344,7 +345,7 @@ def test_handle_telegram_message_queue_db_unavailable_then_start_works(
         return []
 
     monkeypatch.setattr(
-        "apps.cli.telegram_cli.workflow_service.list_actionable_queue",
+        "packages.core.services.job_search_service.build_ranked_queue",
         _maybe_fail,
     )
 

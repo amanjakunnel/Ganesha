@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any, Callable
 import typer
@@ -9,7 +10,6 @@ from sqlalchemy.orm import Session
 from packages.core.db import SessionLocal
 from packages.core.domain.models import DecisionRequest
 from packages.core.services import decision_service, workflow_service
-from packages.core.services.job_service import JobNotFoundError
 from packages.core.services.telegram import (
     TelegramBotClient,
     extract_identity_from_update,
@@ -103,8 +103,9 @@ def handle_telegram_message(
             "Commands:\n"
             "/decisions — pending decisions\n"
             "/decision &lt;id&gt; — show one decision\n"
-            "/queue — actionable job queue\n"
+            "/queue — actionable ranked jobs\n"
             "/job &lt;id&gt; — job summary\n"
+            "/sources — import/sync status\n"
             "/application &lt;id&gt; — application summary",
         )
     elif text.startswith("/decisions"):
@@ -128,16 +129,33 @@ def handle_telegram_message(
     elif text.startswith("/queue"):
 
         def _do() -> None:
-            items = workflow_service.list_actionable_queue(session, limit=10)
+            from packages.core.services.job_display import format_queue_line_telegram
+            from packages.core.services.job_search_service import build_ranked_queue
+
+            items = build_ranked_queue(session, limit=8)
             if not items:
-                client.send_message(chat_id, "Actionable queue is empty.")
-                return
-            lines = ["<b>Actionable queue</b>"]
-            for item in items:
-                lines.append(
-                    f"• <code>{item.job_id}</code> [{item.lifecycle}] {item.company}: {item.title[:40]}"
+                client.send_message(
+                    chat_id,
+                    "No actionable jobs in queue. "
+                    "Run <code>jobs sync-simplifyjobs</code> or <code>jobs import-sheets</code> locally.",
                 )
+                return
+            lines = ["<b>Actionable queue</b> (ranked)"]
+            for item in items:
+                lines.append(format_queue_line_telegram(item))
             client.send_message(chat_id, "\n".join(lines))
+
+        _with_db_session(session, client, chat_id, _do)
+    elif text.startswith("/sources"):
+
+        def _do() -> None:
+            from packages.core.services.job_display import (
+                format_sources_summary_telegram,
+            )
+            from packages.core.services.source_registry import build_sources_summary
+
+            summary = build_sources_summary(session)
+            client.send_message(chat_id, format_sources_summary_telegram(summary))
 
         _with_db_session(session, client, chat_id, _do)
     elif text.startswith("/job"):
@@ -146,14 +164,26 @@ def handle_telegram_message(
             client.send_message(chat_id, "Usage: /job <id>")
             return
         job_id = parts[1].strip()
+        if not re.fullmatch(r"[\w-]{8,64}", job_id):
+            client.send_message(chat_id, "Invalid job ID format.")
+            return
 
         def _do() -> None:
+            from packages.core.services.job_display import format_job_detail_telegram
+            from packages.core.services.job_search_service import (
+                job_detail_with_ranking,
+            )
+
             try:
-                summary = workflow_service.format_job_summary(session, job_id)
-            except JobNotFoundError:
+                detail = job_detail_with_ranking(session, job_id)
+            except LookupError:
                 client.send_message(chat_id, "Job not found.")
                 return
-            client.send_message(chat_id, f"<pre>{summary}</pre>")
+            lifecycle = workflow_service.compute_job_lifecycle(session, job_id)
+            client.send_message(
+                chat_id,
+                format_job_detail_telegram(detail, lifecycle=lifecycle),
+            )
 
         _with_db_session(session, client, chat_id, _do)
     elif text.startswith("/application"):

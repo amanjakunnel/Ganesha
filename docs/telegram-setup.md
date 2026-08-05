@@ -74,8 +74,9 @@ Set `TELEGRAM_DEBUG=1` in `.env` for full tracebacks in local polling logs only.
 | `/start` | Welcome + show your user/chat IDs |
 | `/decisions` | Pending decisions with inline actions |
 | `/decision <id>` | One decision |
-| `/queue` | Actionable job queue |
-| `/job <id>` | Job summary with ranking |
+| `/queue` | Actionable ranked jobs (source + freshness) |
+| `/job <id>` | Job detail with apply link and eligibility |
+| `/sources` | Import/sync status by source |
 | `/application <id>` | Application summary |
 
 ## Testing

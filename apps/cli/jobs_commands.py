@@ -1,4 +1,5 @@
 """Job intake and triage commands (non-production local use only)."""
+
 from __future__ import annotations
 
 import sys
@@ -43,7 +44,9 @@ def _print_import_result(label: str, res: object) -> None:
 
 @jobs_app.command(name="import-linkedin")
 def import_linkedin_cmd(
-    path: str = typer.Option(str(DEFAULT_LINKEDIN_CSV), "--path", help="LinkedIn scraper CSV"),
+    path: str = typer.Option(
+        str(DEFAULT_LINKEDIN_CSV), "--path", help="LinkedIn scraper CSV"
+    ),
 ) -> None:
     """Import jobs from the LinkedIn CSV export in sheets/."""
     from packages.core.services.importers.linkedin_csv import import_linkedin_csv
@@ -59,7 +62,9 @@ def import_linkedin_cmd(
 
 @jobs_app.command(name="import-symplicity")
 def import_symplicity_cmd(
-    path: str = typer.Option(str(DEFAULT_SYMPLICITY_XLSX), "--path", help="Symplicity XLSX"),
+    path: str = typer.Option(
+        str(DEFAULT_SYMPLICITY_XLSX), "--path", help="Symplicity XLSX"
+    ),
 ) -> None:
     """Import jobs from a manual Symplicity XLSX export."""
     from packages.core.services.importers.symplicity_xlsx import import_symplicity_xlsx
@@ -75,10 +80,14 @@ def import_symplicity_cmd(
 
 @jobs_app.command(name="import-referrals")
 def import_referrals_cmd(
-    path: str = typer.Option(str(DEFAULT_REFERRAL_XLSX), "--path", help="Referral contacts XLSX"),
+    path: str = typer.Option(
+        str(DEFAULT_REFERRAL_XLSX), "--path", help="Referral contacts XLSX"
+    ),
 ) -> None:
     """Import referral contact enrichment data (not jobs)."""
-    from packages.core.services.importers.referral_contacts_xlsx import import_referral_contacts_xlsx
+    from packages.core.services.importers.referral_contacts_xlsx import (
+        import_referral_contacts_xlsx,
+    )
 
     session: Session = SessionLocal()
     try:
@@ -93,7 +102,9 @@ def import_referrals_cmd(
 def import_sheets_cmd() -> None:
     """Import LinkedIn, Symplicity, and referral contacts from Ganesha/sheets."""
     from packages.core.services.importers.linkedin_csv import import_linkedin_csv
-    from packages.core.services.importers.referral_contacts_xlsx import import_referral_contacts_xlsx
+    from packages.core.services.importers.referral_contacts_xlsx import (
+        import_referral_contacts_xlsx,
+    )
     from packages.core.services.importers.symplicity_xlsx import import_symplicity_xlsx
 
     session: Session = SessionLocal()
@@ -116,8 +127,10 @@ def import_csv_cmd(path: str) -> None:
     try:
         res = import_csv(session, path)
         session.commit()
-        typer.echo(f"Imported: {res.created}, Duplicates: {res.duplicates}, Errors: {len(res.errors)}")
-        for e in (res.errors or []):
+        typer.echo(
+            f"Imported: {res.created}, Duplicates: {res.duplicates}, Errors: {len(res.errors)}"
+        )
+        for e in res.errors or []:
             typer.echo(f"Error: {e}")
     finally:
         session.close()
@@ -130,15 +143,15 @@ def import_json_cmd(path: str) -> None:
     try:
         res = import_json(session, path)
         session.commit()
-        typer.echo(f"Imported: {res.created}, Duplicates: {res.duplicates}, Errors: {len(res.errors)}")
+        typer.echo(
+            f"Imported: {res.created}, Duplicates: {res.duplicates}, Errors: {len(res.errors)}"
+        )
     finally:
         session.close()
 
 
 @jobs_app.command()
-def add(
-    title: str, company: str, description_file: str | None = None
-) -> None:
+def add(title: str, company: str, description_file: str | None = None) -> None:
     """Manually add a job posting."""
     session: Session = SessionLocal()
     try:
@@ -180,40 +193,26 @@ def list(
 
 
 @jobs_app.command()
-def show(job_id: str, ranked: bool = typer.Option(True, "--ranked/--no-ranked")) -> None:
+def show(
+    job_id: str, ranked: bool = typer.Option(True, "--ranked/--no-ranked")
+) -> None:
     """Show details of a specific job posting."""
     session: Session = SessionLocal()
     try:
         if ranked:
-            from packages.core.services.job_search_service import job_detail_with_ranking
+            from packages.core.services.job_display import format_job_detail_cli
+            from packages.core.services.job_search_service import (
+                job_detail_with_ranking,
+            )
+            from packages.core.services.workflow_service import compute_job_lifecycle
 
             try:
                 detail = job_detail_with_ranking(session, job_id)
             except LookupError:
                 typer.echo("Not found")
                 raise typer.Exit(code=1)
-            j = detail["job"]
-            typer.echo(f"ID: {j.id}")
-            typer.echo(f"Title: {j.title}")
-            typer.echo(f"Company: {detail['company_name']}")
-            typer.echo(f"Source: {j.source_name or j.source} ({j.source_type or '-'})")
-            typer.echo(f"Location: {j.location}")
-            typer.echo(f"Status: {j.status}")
-            typer.echo(f"Rank score: {detail['rank_score']}")
-            typer.echo(f"Rank reasons: {', '.join(detail['rank_reasons'])}")
-            if detail["is_target_company"]:
-                typer.echo(f"Target company: {detail['target_company_name']}")
-            if detail["referral_contact_count"]:
-                typer.echo(f"Referral contacts: {detail['referral_contact_count']}")
-                for c in detail["referral_contacts"][:5]:
-                    typer.echo(f"  - {c.contact_name} ({c.position or 'n/a'})")
-            if j.company_apply_url:
-                typer.echo(f"Apply URL: {j.company_apply_url}")
-            if j.canonical_url:
-                typer.echo(f"Detail URL: {j.canonical_url}")
-            desc_text = j.description_text or ""
-            excerpt = desc_text[:500] + ("..." if len(desc_text) > 500 else "")
-            typer.echo(f"Description:\n{excerpt}")
+            lifecycle = compute_job_lifecycle(session, job_id)
+            typer.echo(format_job_detail_cli(detail, lifecycle=lifecycle))
             return
 
         j = session.query(JobPosting).filter(JobPosting.id == job_id).one_or_none()
@@ -246,6 +245,44 @@ def assess(job_id: str) -> None:
         session.close()
 
 
+@jobs_app.command(name="sync-simplifyjobs")
+def sync_simplifyjobs_cmd(
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Parse without writing to the database"
+    ),
+    limit: int | None = typer.Option(
+        None, "--limit", help="Limit parsed rows (testing)"
+    ),
+) -> None:
+    """Sync new-grad roles from the public SimplifyJobs GitHub repository."""
+    from packages.core.services.simplifyjobs_sync import (
+        SimplifyJobsFetchError,
+        sync_simplifyjobs,
+    )
+
+    session: Session = SessionLocal()
+    try:
+        try:
+            result = sync_simplifyjobs(session, dry_run=dry_run, limit=limit)
+        except SimplifyJobsFetchError as exc:
+            typer.secho(str(exc), fg=typer.colors.RED)
+            raise typer.Exit(code=2)
+        if not dry_run:
+            session.commit()
+        typer.echo(
+            "SimplifyJobs sync: "
+            f"fetched={'yes' if result.fetched else 'no'}, "
+            f"parsed={result.parsed}, created={result.created}, "
+            f"updated={result.updated}, duplicates={result.duplicates}, "
+            f"actionable={result.actionable}, needs_review={result.needs_review}, "
+            f"excluded={result.excluded}, errors={len(result.errors)}"
+        )
+        for err in result.errors[:10]:
+            typer.echo(f"  error: {err}")
+    finally:
+        session.close()
+
+
 @jobs_app.command(name="queue")
 def queue_cmd(
     limit: int = 20,
@@ -253,9 +290,33 @@ def queue_cmd(
     referral_only: bool = typer.Option(False, "--referral-only"),
     target_only: bool = typer.Option(False, "--target-only"),
     min_score: int | None = typer.Option(None, "--min-score"),
+    review: bool = typer.Option(False, "--review", help="Show needs-review jobs only"),
+    excluded: bool = typer.Option(False, "--excluded", help="Show excluded jobs only"),
+    all_eligibility: bool = typer.Option(
+        False, "--all", help="Include actionable, review, and excluded jobs"
+    ),
 ) -> None:
-    """List ranked actionable jobs for job search."""
+    """List ranked jobs for job search (actionable by default)."""
+    from packages.core.services.job_eligibility import (
+        ELIGIBILITY_ACTIONABLE,
+        ELIGIBILITY_EXCLUDED,
+        ELIGIBILITY_NEEDS_REVIEW,
+    )
+    from packages.core.services.job_display import format_queue_line_cli
     from packages.core.services.job_search_service import build_ranked_queue
+    from packages.core.services.workflow_service import compute_job_lifecycle
+
+    if review and excluded:
+        typer.secho("Use only one of --review or --excluded.", fg=typer.colors.RED)
+        raise typer.Exit(code=2)
+
+    eligibility_filter: str | None = ELIGIBILITY_ACTIONABLE
+    if all_eligibility:
+        eligibility_filter = None
+    elif review:
+        eligibility_filter = ELIGIBILITY_NEEDS_REVIEW
+    elif excluded:
+        eligibility_filter = ELIGIBILITY_EXCLUDED
 
     session: Session = SessionLocal()
     try:
@@ -266,22 +327,58 @@ def queue_cmd(
             referral_only=referral_only,
             target_only=target_only,
             min_score=min_score,
+            eligibility=eligibility_filter,
         )
         if not items:
-            typer.echo("Actionable queue is empty.")
+            label = eligibility_filter or "matching"
+            typer.echo(f"No {label} jobs in queue.")
             return
         for item in items:
-            flags = []
-            if item.is_target_company:
-                flags.append("target")
-            if item.has_referral_contacts:
-                flags.append(f"referral:{item.referral_contact_count}")
-            flag_txt = f" [{' '.join(flags)}]" if flags else ""
-            typer.echo(
-                f"{item.ranked.score:>4} | {item.job.id} | {item.source_name or '-'} | "
-                f"{item.company_name} | {item.job.title[:50]}{flag_txt}"
-            )
+            lifecycle = compute_job_lifecycle(session, item.job.id)
+            typer.echo(format_queue_line_cli(item, lifecycle=lifecycle))
             typer.echo(f"      reasons: {', '.join(item.ranked.reasons[:4])}")
+    finally:
+        session.close()
+
+
+@jobs_app.command(name="queue-review")
+def queue_review_cmd(limit: int = 20) -> None:
+    """List ranked jobs that need manual review."""
+    from packages.core.services.job_eligibility import ELIGIBILITY_NEEDS_REVIEW
+    from packages.core.services.job_display import format_queue_line_cli
+    from packages.core.services.job_search_service import build_ranked_queue
+
+    session: Session = SessionLocal()
+    try:
+        items = build_ranked_queue(
+            session, limit=limit, eligibility=ELIGIBILITY_NEEDS_REVIEW
+        )
+        if not items:
+            typer.echo("No needs-review jobs.")
+            return
+        for item in items:
+            typer.echo(format_queue_line_cli(item))
+    finally:
+        session.close()
+
+
+@jobs_app.command(name="queue-excluded")
+def queue_excluded_cmd(limit: int = 20) -> None:
+    """List ranked excluded jobs for audit."""
+    from packages.core.services.job_eligibility import ELIGIBILITY_EXCLUDED
+    from packages.core.services.job_display import format_queue_line_cli
+    from packages.core.services.job_search_service import build_ranked_queue
+
+    session: Session = SessionLocal()
+    try:
+        items = build_ranked_queue(
+            session, limit=limit, eligibility=ELIGIBILITY_EXCLUDED
+        )
+        if not items:
+            typer.echo("No excluded jobs.")
+            return
+        for item in items:
+            typer.echo(format_queue_line_cli(item))
     finally:
         session.close()
 
@@ -350,7 +447,12 @@ def defer(job_id: str, until: str = typer.Option(..., help="YYYY-MM-DD")) -> Non
         _until = datetime.fromisoformat(until)
         j.status = "deferred"
         session.add(j)
-        ev = AuditEvent(entity_type="job_posting", entity_id=j.id, event_type="deferred", payload={"until": until})
+        ev = AuditEvent(
+            entity_type="job_posting",
+            entity_id=j.id,
+            event_type="deferred",
+            payload={"until": until},
+        )
         session.add(ev)
         session.commit()
         typer.echo("Deferred")
@@ -384,7 +486,9 @@ def referral_start_cmd(job_id: str, cutoff_hours: int = 48) -> None:
             .one_or_none()
         )
         if dec:
-            typer.echo(f"Referral task started, cutoff_at={rt.cutoff_at}, decision_id={dec.id}")
+            typer.echo(
+                f"Referral task started, cutoff_at={rt.cutoff_at}, decision_id={dec.id}"
+            )
         else:
             typer.echo(f"Referral task started, cutoff_at={rt.cutoff_at}")
     finally:
@@ -396,7 +500,11 @@ def referral_status_cmd(job_id: str) -> None:
     """Check the status of a referral task."""
     session: Session = SessionLocal()
     try:
-        r = session.query(ReferralTask).filter(ReferralTask.job_posting_id == job_id).one_or_none()
+        r = (
+            session.query(ReferralTask)
+            .filter(ReferralTask.job_posting_id == job_id)
+            .one_or_none()
+        )
         if r is None:
             typer.echo("No referral task")
             raise typer.Exit(code=1)

@@ -58,15 +58,37 @@ After `make migrate`, run the end-to-end demo workflow:
    .venv/bin/python -m apps.cli.main workflow queue
    .venv/bin/python -m apps.cli.main decisions list
 
-Job search imports (place source files under `sheets/` locally):
+Job search (local operator loop)
+--------------------------------
+Load static local files and sync the live SimplifyJobs GitHub source:
 
    .venv/bin/python -m apps.cli.main jobs import-sheets
-   .venv/bin/python -m apps.cli.main jobs queue --target-only
-   .venv/bin/python -m apps.cli.main jobs queue --referral-only
+   .venv/bin/python -m apps.cli.main jobs sync-simplifyjobs
+   .venv/bin/python -m apps.cli.main jobs queue --limit 10
    .venv/bin/python -m apps.cli.main jobs show <job_id>
 
-Supported inputs: LinkedIn scraper CSV, Symplicity manual XLSX, referral contacts XLSX.
+Review or audit non-actionable jobs:
+
+   .venv/bin/python -m apps.cli.main jobs queue-review
+   .venv/bin/python -m apps.cli.main jobs queue-excluded
+
+Telegram (after `telegram run`):
+
+   /queue — actionable ranked jobs with source + freshness
+   /job <id> — detail with apply link and eligibility state
+   /sources — import/sync status summary
+
+Source policy (this phase)
+--------------------------
+- **SimplifyJobs** — public GitHub README, manual CLI sync (`jobs sync-simplifyjobs`). No browser automation.
+- **LinkedIn** — static CSV import from local `sheets/` only. No LinkedIn automation or authenticated scraping.
+- **Symplicity** — static XLSX import from local `sheets/` only. No Penn State authenticated scraping.
+- No automated job applications or external submission in this phase.
+- Clearance, citizenship, and sponsorship constraints are classified internally; Telegram messages use neutral category labels only.
+
+Supported static inputs: LinkedIn scraper CSV, Symplicity manual XLSX, referral contacts XLSX.
 Ranking is deterministic (source priority, freshness, track fit, early-career vs senior/clearance signals, target companies, referral matches).
+Default `jobs queue` and Telegram `/queue` show **actionable** jobs only.
 
 Optional Telegram operator console (requires local `.env`; see [docs/telegram-setup.md](docs/telegram-setup.md)):
 
@@ -104,6 +126,7 @@ Then rebuild schema and reload data:
 
    .venv/bin/python -m apps.cli.main db-reset-local --yes
    .venv/bin/python -m apps.cli.main jobs import-sheets
+   .venv/bin/python -m apps.cli.main jobs sync-simplifyjobs
    .venv/bin/python -m apps.cli.main jobs queue --limit 10
 
 Happy path after a clean local setup:
@@ -111,5 +134,6 @@ Happy path after a clean local setup:
    .venv/bin/python -m apps.cli.main db doctor
    .venv/bin/python -m apps.cli.main db-reset-local --yes
    .venv/bin/python -m apps.cli.main jobs import-sheets
+   .venv/bin/python -m apps.cli.main jobs sync-simplifyjobs
    .venv/bin/python -m apps.cli.main jobs queue --limit 10
    .venv/bin/python -m apps.cli.main telegram run
