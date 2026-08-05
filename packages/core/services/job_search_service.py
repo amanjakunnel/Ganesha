@@ -6,7 +6,15 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from packages.core.domain.models import JobPosting, ReferralContact
-from packages.core.services.company_normalize import companies_likely_same, is_target_company, normalize_company_key
+from packages.core.services.company_normalize import (
+    companies_likely_same,
+    is_target_company,
+    normalize_company_key,
+)
+from packages.core.services.job_eligibility import (
+    ELIGIBILITY_ACTIONABLE,
+    resolve_job_eligibility,
+)
 from packages.core.services.job_ranking import RankedJob, rank_job
 
 
@@ -34,7 +42,9 @@ def _referral_index(session: Session) -> dict[str, int]:
 def _referral_count_for_job(job: JobPosting, index: dict[str, int]) -> int:
     if not job.company:
         return 0
-    key = job.company.normalized_key or normalize_company_key(job.company.canonical_name)
+    key = job.company.normalized_key or normalize_company_key(
+        job.company.canonical_name
+    )
     if key in index:
         return index[key]
     for k, v in index.items():
@@ -51,16 +61,22 @@ def build_ranked_queue(
     referral_only: bool = False,
     target_only: bool = False,
     min_score: int | None = None,
+    eligibility: str | None = ELIGIBILITY_ACTIONABLE,
 ) -> list[RankedQueueItem]:
     referral_index = _referral_index(session)
     q = session.query(JobPosting).filter(
-        JobPosting.status.in_(["new", "queued_for_review", "assessed", "needs_decision"])
+        JobPosting.status.in_(
+            ["new", "queued_for_review", "assessed", "needs_decision"]
+        )
     )
     if source_name:
         q = q.filter(JobPosting.source_name == source_name)
     jobs = q.all()
     items: list[RankedQueueItem] = []
     for job in jobs:
+        job_eligibility = resolve_job_eligibility(job)
+        if eligibility is not None and job_eligibility.result != eligibility:
+            continue
         company_name = job.company.canonical_name if job.company else "Unknown"
         ref_count = _referral_count_for_job(job, referral_index)
         has_ref = ref_count > 0
@@ -140,4 +156,5 @@ def job_detail_with_ranking(session: Session, job_id: str) -> dict[str, Any]:
         "target_company_name": target_name,
         "referral_contact_count": ref_count,
         "referral_contacts": contacts,
+        "eligibility": resolve_job_eligibility(job),
     }

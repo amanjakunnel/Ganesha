@@ -7,9 +7,16 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from packages.core.domain.models import AuditEvent, Company, JobPosting
-from packages.core.services.company_normalize import canonical_company_display, normalize_company_key
+from packages.core.services.company_normalize import (
+    canonical_company_display,
+    normalize_company_key,
+)
 from packages.core.services.job_dedupe import find_duplicate_job
 from packages.core.domain.models import make_description_hash, make_dedupe_key
+from packages.core.services.job_eligibility import (
+    attach_eligibility_to_metadata,
+    classify_job_eligibility,
+)
 from packages.core.services.job_ranking import detect_intake_flags
 
 
@@ -62,7 +69,9 @@ def upsert_job_from_import(
     """
     dup = find_duplicate_job(session, {**data, "source_name": source_name})
     if dup.is_duplicate and dup.existing_id:
-        existing = session.query(JobPosting).filter(JobPosting.id == dup.existing_id).one()
+        existing = (
+            session.query(JobPosting).filter(JobPosting.id == dup.existing_id).one()
+        )
         _touch_import(existing, data, source_name, source_type, dup.reasons)
         session.add(existing)
         ev = AuditEvent(
@@ -79,6 +88,18 @@ def upsert_job_from_import(
     title = data["title"]
     description_text = data["description_text"]
     flags = detect_intake_flags(title, description_text)
+    simplify_markers = (data.get("intake_metadata") or {}).get("simplify_markers")
+    eligibility = classify_job_eligibility(
+        title=title,
+        description=description_text,
+        company_apply_url=data.get("company_apply_url"),
+        intake_flags=flags,
+        source_markers=simplify_markers,
+    )
+    intake_meta = attach_eligibility_to_metadata(
+        {"flags": flags, **(data.get("intake_metadata") or {})},
+        eligibility,
+    )
 
     jp = JobPosting(
         source=legacy_source or source_type,
@@ -100,7 +121,7 @@ def upsert_job_from_import(
         description_hash=make_description_hash(description_text),
         dedupe_key=make_dedupe_key(data["company"], title, data.get("location")),
         raw_payload=data.get("raw_payload"),
-        intake_metadata={"flags": flags, **(data.get("intake_metadata") or {})},
+        intake_metadata=intake_meta,
         source_import_key=data.get("source_import_key"),
     )
     session.add(jp)
@@ -129,7 +150,25 @@ def _touch_import(
         jp.posted_at = _parse_date(data.get("posted_at"))
     if data.get("company_apply_url") and not jp.company_apply_url:
         jp.company_apply_url = data.get("company_apply_url")
+    flags = detect_intake_flags(jp.title, jp.description_text or "")
+    simplify_markers = (data.get("intake_metadata") or {}).get("simplify_markers")
+    eligibility = classify_job_eligibility(
+        title=jp.title,
+        description=jp.description_text or "",
+        company_apply_url=jp.company_apply_url,
+        intake_flags=flags,
+        source_markers=simplify_markers,
+    )
     meta = dict(jp.intake_metadata or {})
+    meta["flags"] = flags
+    meta.update(
+        {
+            k: v
+            for k, v in (data.get("intake_metadata") or {}).items()
+            if k != "eligibility"
+        }
+    )
+    meta = attach_eligibility_to_metadata(meta, eligibility)
     meta["last_import"] = {
         "source_name": source_name,
         "source_type": source_type,
