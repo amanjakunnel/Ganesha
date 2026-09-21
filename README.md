@@ -95,6 +95,42 @@ Optional Telegram operator console (requires local `.env`; see [docs/telegram-se
    .venv/bin/python -m apps.cli.main telegram doctor
    .venv/bin/python -m apps.cli.main telegram run
 
+Local job dashboard (read-only)
+-------------------------------
+Browse every job stored in the local Ganesha database (no duplicate store, no edits):
+
+```bash
+python run_dashboard.py
+```
+
+Open:
+
+```text
+http://127.0.0.1:8000
+```
+
+Optional port:
+
+```bash
+DASHBOARD_PORT=8010 python run_dashboard.py
+```
+
+Also available as:
+
+```bash
+.venv/bin/python -m apps.cli.main dashboard run
+```
+
+JSON API (same filters as the page):
+
+```text
+GET /api/jobs?q=engineer&source=linkedin&sort=date_desc&page=1&page_size=50
+```
+
+- Read-only; binds to `127.0.0.1` only.
+- Shows all imported/synced jobs by default (not just the actionable Telegram queue).
+- If the database is unreachable, run `python -m apps.cli.main db doctor`.
+
 See Makefile and docs/runbook.md for full commands and notes.
 
 Database migrations

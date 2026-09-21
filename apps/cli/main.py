@@ -44,6 +44,10 @@ from apps.cli.workflow_commands import workflow_app  # noqa: E402
 
 app.add_typer(workflow_app, name="workflow")
 
+from apps.cli.dashboard_commands import dashboard_app  # noqa: E402
+
+app.add_typer(dashboard_app, name="dashboard")
+
 
 @app.command("db-doctor", hidden=True)
 def db_doctor_legacy() -> None:

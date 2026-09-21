@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ganesha Job Dashboard</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-text">
+      <h1>Ganesha Job Dashboard</h1>
+      <p class="subtitle">Read-only view of jobs in your local Ganesha database</p>
+    </div>
+    <p class="result-count" id="result-count" aria-live="polite">Loading…</p>
+  </header>
+
+  <main>
+    <form id="filters" class="filters" role="search" aria-label="Job filters">
+      <div class="filter-field">
+        <label for="q">Keyword</label>
+        <input type="search" id="q" name="q" placeholder="Search title or company" autocomplete="off">
+      </div>
+      <div class="filter-field">
+        <label for="source">Source</label>
+        <select id="source" name="source">
+          <option value="">All sources</option>
+        </select>
+      </div>
+      <div class="filter-field">
+        <label for="location">Location</label>
+        <input type="text" id="location" name="location" placeholder="Filter location" autocomplete="off">
+      </div>
+      <div class="filter-field">
+        <label for="date_from">Date added from</label>
+        <input type="date" id="date_from" name="date_from">
+      </div>
+      <div class="filter-field">
+        <label for="date_to">Date added to</label>
+        <input type="date" id="date_to" name="date_to">
+      </div>
+      <div class="filter-field">
+        <label for="sort">Sort</label>
+        <select id="sort" name="sort">
+          <option value="date_desc">Newest added</option>
+          <option value="date_asc">Oldest added</option>
+          <option value="title_asc">Title A–Z</option>
+          <option value="title_desc">Title Z–A</option>
+          <option value="company_asc">Company A–Z</option>
+          <option value="company_desc">Company Z–A</option>
+          <option value="location_asc">Location A–Z</option>
+          <option value="location_desc">Location Z–A</option>
+          <option value="source_asc">Source A–Z</option>
+          <option value="source_desc">Source Z–A</option>
+        </select>
+      </div>
+      <div class="filter-actions">
+        <button type="submit" class="btn primary">Search</button>
+        <button type="button" class="btn" id="clear-filters">Clear filters</button>
+      </div>
+    </form>
+
+    <p id="status-message" class="status-message" hidden role="status"></p>
+
+    <div class="table-wrap" id="results-wrap">
+      <table class="jobs-table" aria-describedby="result-count">
+        <thead>
+          <tr>
+            <th scope="col">Title</th>
+            <th scope="col">Company</th>
+            <th scope="col">Location</th>
+            <th scope="col">Source</th>
+            <th scope="col">Date found</th>
+            <th scope="col">Original posting</th>
+          </tr>
+        </thead>
+        <tbody id="jobs-body">
+        </tbody>
+      </table>
+    </div>
+
+    <nav class="pagination" id="pagination" aria-label="Pagination" hidden>
+      <button type="button" class="btn" id="prev-page">Previous</button>
+      <p class="page-meta" id="page-meta"></p>
+      <button type="button" class="btn" id="next-page">Next</button>
+    </nav>
+  </main>
+
+  <script>
+    window.GANESHA_DASHBOARD = {
+      dbUnavailableMessage: {{ db_unavailable_message | tojson }}
+    };
+  </script>
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>
