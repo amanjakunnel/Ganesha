@@ -35,7 +35,9 @@ class ParsedSimplifyJob:
 
 def _parse_table_rows(section_html: str) -> list[list[str]]:
     rows: list[list[str]] = []
-    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", section_html, flags=re.DOTALL | re.IGNORECASE):
+    for tr in re.findall(
+        r"<tr[^>]*>(.*?)</tr>", section_html, flags=re.DOTALL | re.IGNORECASE
+    ):
         cells = re.findall(r"<td[^>]*>(.*?)</td>", tr, flags=re.DOTALL | re.IGNORECASE)
         if cells:
             rows.append([cell.strip() for cell in cells])
@@ -85,7 +87,9 @@ def _age_to_posted_at(age_days: int | None, *, synced_at: datetime) -> datetime 
     return synced_at - timedelta(days=age_days)
 
 
-def _detect_markers(company_cell: str, role_cell: str, application_cell: str) -> dict[str, bool]:
+def _detect_markers(
+    company_cell: str, role_cell: str, application_cell: str
+) -> dict[str, bool]:
     role_blob = f"{company_cell} {role_cell}"
     app = application_cell.strip()
     return {
@@ -184,6 +188,17 @@ def simplifyjobs_import_key(
     return hash_text(f"simplifyjobs|{company}|{title}|{location or ''}")
 
 
+def _truncate(value: str | None, max_len: int) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1].rstrip() + "…"
+
+
 def parsed_row_to_import_dict(
     row: ParsedSimplifyJob, *, synced_at: datetime
 ) -> dict[str, Any]:
@@ -203,7 +218,8 @@ def parsed_row_to_import_dict(
         "title": row.title,
         "company": row.company,
         "description_text": description,
-        "location": row.location,
+        # job_postings.location is VARCHAR(255); multi-city Simplify rows can exceed that.
+        "location": _truncate(row.location, 255),
         "company_apply_url": row.apply_url,
         "canonical_url": row.source_row_url,
         "posted_at": posted_at.isoformat() if posted_at else None,

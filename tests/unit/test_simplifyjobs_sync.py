@@ -97,8 +97,32 @@ def test_classify_eligibility_categories() -> None:
             "Source: github\nCategory: software\nAdditional context for length."
         ),
         company_apply_url="https://apply.example/jobs/1",
+        location="San Jose, CA",
     )
     assert actionable.result == ELIGIBILITY_ACTIONABLE
+
+    excluded_canada = classify_job_eligibility(
+        title="Software Development Engineer - Early Career",
+        description=(
+            "Company: Amazon\nRole: Software Development Engineer - Early Career\n"
+            "Location: Vancouver, BC, Canada\nSource: github"
+        ),
+        company_apply_url="https://amazon.jobs/example",
+        location="Vancouver, BC, Canada",
+    )
+    assert excluded_canada.result == ELIGIBILITY_EXCLUDED
+    assert excluded_canada.reason_category == "non_us_location"
+
+    us_multi = classify_job_eligibility(
+        title="Software Engineer – Early Career",
+        description=(
+            "Company: Amazon\nRole: Software Engineer\n"
+            "Location: Seattle, WA Austin, TX\nSource: github extra padding text."
+        ),
+        company_apply_url="https://amazon.jobs/example2",
+        location="9 locations Madison, WI Boston, MA Seattle, WA Austin, TX",
+    )
+    assert us_multi.result == ELIGIBILITY_ACTIONABLE
 
 
 def test_sync_simplifyjobs_idempotent(readme_snippet: str) -> None:

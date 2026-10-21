@@ -93,6 +93,7 @@ def upsert_job_from_import(
         title=title,
         description=description_text,
         company_apply_url=data.get("company_apply_url"),
+        location=data.get("location"),
         intake_flags=flags,
         source_markers=simplify_markers,
     )
@@ -156,6 +157,7 @@ def _touch_import(
         title=jp.title,
         description=jp.description_text or "",
         company_apply_url=jp.company_apply_url,
+        location=data.get("location") or jp.location,
         intake_flags=flags,
         source_markers=simplify_markers,
     )

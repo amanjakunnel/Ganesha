@@ -25,6 +25,7 @@ def _insert_job(
     description: str,
     apply_url: str | None,
     source_import_key: str,
+    location: str | None = "New York, NY",
 ) -> str:
     job_id, _ = upsert_job_from_import(
         session,
@@ -33,6 +34,7 @@ def _insert_job(
             "company": "QueueTestCo",
             "description_text": description,
             "company_apply_url": apply_url,
+            "location": location,
             "source_import_key": source_import_key,
         },
         source_name="simplifyjobs",
@@ -54,6 +56,7 @@ def test_build_ranked_queue_defaults_to_actionable_only() -> None:
             ),
             apply_url="https://apply.example/1",
             source_import_key="test-actionable",
+            location="New York, NY",
         )
         _insert_job(
             session,
@@ -64,6 +67,18 @@ def test_build_ranked_queue_defaults_to_actionable_only() -> None:
             ),
             apply_url="https://apply.example/2",
             source_import_key="test-excluded",
+            location="New York, NY",
+        )
+        _insert_job(
+            session,
+            title="Canada Role",
+            description=(
+                "Company: Co\nRole: Engineer\nLocation: Vancouver, BC, Canada\n"
+                "Source: test\nAdditional context for description length requirements."
+            ),
+            apply_url="https://apply.example/3",
+            source_import_key="test-canada",
+            location="Vancouver, BC, Canada",
         )
         actionable = build_ranked_queue(session, limit=10)
         assert len(actionable) == 1

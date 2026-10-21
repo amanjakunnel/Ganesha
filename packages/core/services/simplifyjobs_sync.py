@@ -86,6 +86,7 @@ def sync_simplifyjobs(
                 title=data["title"],
                 description=data["description_text"],
                 company_apply_url=data.get("company_apply_url"),
+                location=data.get("location"),
                 source_markers=markers,
                 incomplete_row=not data["title"] or not data["company"],
             )
