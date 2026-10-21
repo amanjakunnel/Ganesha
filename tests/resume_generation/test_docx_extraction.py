@@ -23,14 +23,20 @@ def test_extraction_preserves_parent_context(tmp_path: Path) -> None:
     assert headers
     assert any(f.parent_name for f in headers)
 
-    bullets = [f for f in facts if f.fact_kind == "bullet" and f.section == "experience"]
+    bullets = [
+        f for f in facts if f.fact_kind == "bullet" and f.section == "experience"
+    ]
     assert bullets
     assert all(f.parent_key for f in bullets)
 
     projects = [f for f in facts if f.section == "projects" and f.fact_kind == "bullet"]
     assert projects
     assert all(f.parent_name for f in projects)
-    assert any("tacodb" in (f.parent_name or "").lower() for f in facts if f.section == "projects")
+    assert any(
+        "tacodb" in (f.parent_name or "").lower()
+        for f in facts
+        if f.section == "projects"
+    )
 
     gpa_facts = [f for f in facts if f.gpa_value]
     assert gpa_facts

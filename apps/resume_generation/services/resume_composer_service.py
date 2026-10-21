@@ -7,5 +7,7 @@ from apps.resume_generation.services.structured_document_service import trim_doc
 ComposedResume = ResumeDocument
 
 
-def trim_for_page_budget(composed: ResumeDocument, *, pass_number: int) -> ResumeDocument:
+def trim_for_page_budget(
+    composed: ResumeDocument, *, pass_number: int
+) -> ResumeDocument:
     return trim_document(composed, pass_number=pass_number)

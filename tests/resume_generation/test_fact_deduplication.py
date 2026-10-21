@@ -8,7 +8,10 @@ from sqlalchemy.orm import Session
 from apps.resume_generation.services.resume_fact_service import scan_resume_corpus
 from packages.core.db import SessionLocal, get_engine
 from packages.core.domain.models import Base, ResumeFact, ResumeSourceDocument
-from tests.resume_generation.conftest import build_conflicting_gpa_corpus, build_standard_corpus
+from tests.resume_generation.conftest import (
+    build_conflicting_gpa_corpus,
+    build_standard_corpus,
+)
 
 
 @pytest.fixture()
@@ -31,11 +34,7 @@ def test_gpa_conflicts_detected_and_unusable(session: Session, tmp_path: Path) -
     summary = scan_resume_corpus(session, path=root, rebuild=True)
     session.commit()
     assert summary.conflict_warnings >= 1
-    gpa_facts = (
-        session.query(ResumeFact)
-        .filter(ResumeFact.gpa_value.isnot(None))
-        .all()
-    )
+    gpa_facts = session.query(ResumeFact).filter(ResumeFact.gpa_value.isnot(None)).all()
     assert {f.gpa_value for f in gpa_facts} >= {"3.5", "3.6", "3.7"}
     assert all(f.verification_state == "conflict" for f in gpa_facts)
     assert all(f.usable is False for f in gpa_facts)

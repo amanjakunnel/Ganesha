@@ -55,18 +55,21 @@ def _convert_with_word(docx_path: Path, pdf_path: Path) -> None:
     """Convert via Microsoft Word AppleScript on macOS."""
     docx_abs = str(docx_path.resolve())
     pdf_abs = str(pdf_path.resolve())
-    # Word's "open" returns a document on some versions and void on others;
-    # always bind via active document after open.
+    if pdf_path.exists():
+        pdf_path.unlink()
+    # Prefer save-as PDF; treat PDF presence as success even if close is flaky.
     script = f'''
 set docxPOSIX to POSIX file "{docx_abs}"
 set pdfPOSIX to POSIX file "{pdf_abs}"
 tell application "Microsoft Word"
     activate
     open docxPOSIX
-    delay 1
+    delay 2
     set theDoc to active document
     save as theDoc file name pdfPOSIX file format format PDF
-    close theDoc saving no
+    try
+        close theDoc saving no
+    end try
 end tell
 '''
     result = subprocess.run(
@@ -76,9 +79,10 @@ end tell
         timeout=180,
         check=False,
     )
-    if result.returncode != 0 or not pdf_path.exists():
-        detail = (result.stderr or result.stdout or "").strip()
-        raise RuntimeError(f"Word PDF conversion failed: {detail}")
+    if pdf_path.exists() and pdf_path.stat().st_size > 0:
+        return
+    detail = (result.stderr or result.stdout or "").strip()
+    raise RuntimeError(f"Word PDF conversion failed: {detail}")
 
 
 def _convert_with_libreoffice(docx_path: Path, pdf_path: Path, lo_bin: str) -> None:

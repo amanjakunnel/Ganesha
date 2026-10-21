@@ -197,8 +197,7 @@ def scan_resume_corpus(
                 existing = (
                     session.query(ResumeSourceDocument)
                     .filter(
-                        ResumeSourceDocument.absolute_path
-                        == str(docx_path.resolve())
+                        ResumeSourceDocument.absolute_path == str(docx_path.resolve())
                     )
                     .one_or_none()
                 )

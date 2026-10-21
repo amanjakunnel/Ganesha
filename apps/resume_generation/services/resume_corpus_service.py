@@ -290,9 +290,15 @@ def extract_facts_from_docx(path: Path, root: Path) -> list[ExtractedFact]:
             if section == "experience":
                 if pending_org:
                     parent_name = pending_org
-                    role_title = title or company or DATE_RE.sub("", raw).strip(" -–—|\t")
+                    role_title = (
+                        title or company or DATE_RE.sub("", raw).strip(" -–—|\t")
+                    )
                     pending_org = None
-                elif company and title and normalize_text(company) != normalize_text(title):
+                elif (
+                    company
+                    and title
+                    and normalize_text(company) != normalize_text(title)
+                ):
                     parent_name, role_title = company, title
                 elif dates_text:
                     # Single line title + dates; company unknown → keep as title only
@@ -316,9 +322,7 @@ def extract_facts_from_docx(path: Path, root: Path) -> list[ExtractedFact]:
                 kind = "role_header"
             elif section == "projects":
                 parent_name = (
-                    pending_org
-                    or company
-                    or raw.split("|")[0].split("—")[0].strip()
+                    pending_org or company or raw.split("|")[0].split("—")[0].strip()
                 )
                 pending_org = None
                 role_title = None
@@ -329,7 +333,9 @@ def extract_facts_from_docx(path: Path, root: Path) -> list[ExtractedFact]:
             else:
                 if pending_org:
                     parent_name = pending_org
-                    role_title = title or company or DATE_RE.sub("", raw).strip(" -–—|\t")
+                    role_title = (
+                        title or company or DATE_RE.sub("", raw).strip(" -–—|\t")
+                    )
                     pending_org = None
                 else:
                     parent_name = company or raw

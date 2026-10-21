@@ -7,7 +7,9 @@ import pytest
 from sqlalchemy.orm import Session
 
 from apps.resume_generation.services.resume_fact_service import scan_resume_corpus
-from apps.resume_generation.services.resume_strategy_service import build_resume_strategy
+from apps.resume_generation.services.resume_strategy_service import (
+    build_resume_strategy,
+)
 from apps.resume_generation.services.structured_document_service import (
     validate_document_structure,
 )

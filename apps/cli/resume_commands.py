@@ -10,6 +10,10 @@ from apps.resume_generation.paths import (
     default_source_path,
     desktop_pdf_path,
 )
+from apps.resume_generation.services.audit_service import (
+    build_audit_report,
+    format_audit_report,
+)
 from apps.resume_generation.services.generation_service import (
     generate_resume_for_job,
 )
@@ -108,6 +112,32 @@ def doctor_cmd() -> None:
     typer.echo(f"  Semantic API key: {sem['api_key']}")
 
 
+@resumes_app.command("audit")
+def audit_cmd(
+    job_id: str = typer.Argument(..., help="Canonical job posting ID"),
+    track: str | None = typer.Option(
+        None, "--track", help="dev|cloud|ml|csharp|general"
+    ),
+    deterministic_only: bool = typer.Option(
+        True, "--deterministic-only/--allow-semantic", help="Audit planning mode"
+    ),
+) -> None:
+    """Inspect generation plan, eligibility, and provenance without writing files."""
+    session: Session = SessionLocal()
+    try:
+        report = build_audit_report(
+            session,
+            job_id,
+            deterministic_only=deterministic_only,
+            track=track,
+        )
+        typer.echo(format_audit_report(report))
+        if not report.permitted:
+            raise typer.Exit(code=1)
+    finally:
+        session.close()
+
+
 @resumes_app.command("generate")
 def generate_cmd(
     job_id: str = typer.Argument(..., help="Canonical job posting ID"),
@@ -158,7 +188,7 @@ def generate_cmd(
         if result.error:
             typer.echo(f"Error: {result.error}")
             raise typer.Exit(code=1)
-        if result.status in {"error", "validation_failed"}:
+        if result.status in {"error", "validation_failed", "blocked"}:
             raise typer.Exit(code=1)
     finally:
         session.close()

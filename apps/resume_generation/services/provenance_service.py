@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from apps.resume_generation.schemas import ResumeDocument, ResumeStrategy, ValidationReport
+from apps.resume_generation.schemas import (
+    ResumeDocument,
+    ResumeStrategy,
+    ValidationReport,
+)
 
 
 def build_audit_payload(

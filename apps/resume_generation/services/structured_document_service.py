@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from difflib import SequenceMatcher
 
@@ -27,17 +28,57 @@ def _near_dupe_key(text: str) -> str:
     return " ".join(words)
 
 
-def _is_near_duplicate(candidate: str, existing: list[str], threshold: float = 0.72) -> bool:
+def _is_near_duplicate(
+    candidate: str, existing: list[str], threshold: float = 0.62
+) -> bool:
     cand = _near_dupe_key(candidate)
     for prev in existing:
-        if SequenceMatcher(None, cand, _near_dupe_key(prev)).ratio() >= threshold:
+        ratio = SequenceMatcher(None, cand, _near_dupe_key(prev)).ratio()
+        if ratio >= threshold:
+            return True
+        # Shared multi-cloud / infra claim skeleton
+        shared = set(cand.split()) & set(_near_dupe_key(prev).split())
+        heavy = {
+            "aws",
+            "gcp",
+            "azure",
+            "terraform",
+            "kubernetes",
+            "jenkins",
+            "kafka",
+            "ansible",
+            "mern",
+            "axios",
+        }
+        if len(shared & heavy) >= 3 and ratio >= 0.5:
             return True
     return False
+
+
+def _role_sort_key(entry: ExperienceEntry) -> tuple:
+    """Reverse-chronological: prefer Present / later end years."""
+    dates = (entry.dates or "").lower()
+    present = 1 if "present" in dates else 0
+    years = [int(y) for y in re.findall(r"(20\d{2})", entry.dates or "")]
+    end = max(years) if years else 0
+    return (present, end)
+
 
 SKILL_CATEGORIES: list[tuple[str, set[str]]] = [
     (
         "Languages",
-        {"python", "java", "javascript", "typescript", "c++", "c#", "go", "sql", "shell", "bash"},
+        {
+            "python",
+            "java",
+            "javascript",
+            "typescript",
+            "c++",
+            "c#",
+            "go",
+            "sql",
+            "shell",
+            "bash",
+        },
     ),
     (
         "Cloud & DevOps",
@@ -117,7 +158,10 @@ def _build_experience_entries(
     bullets = [
         f
         for f in facts
-        if f.section == "experience" and f.fact_kind == "bullet" and f.usable and f.parent_key
+        if f.section == "experience"
+        and f.fact_kind == "bullet"
+        and f.usable
+        and f.parent_key
     ]
     by_key: dict[str, list[ResumeFact]] = defaultdict(list)
     for b in bullets:
@@ -184,12 +228,16 @@ def _build_experience_entries(
         for b in scored_bullets:
             if b.normalized_text in used_bullet_norms:
                 continue
-            if _is_near_duplicate(b.normalized_text, chosen_texts + list(used_bullet_norms)):
+            if _is_near_duplicate(
+                b.normalized_text, chosen_texts + list(used_bullet_norms)
+            ):
                 continue
             used_bullet_norms.add(b.normalized_text)
             chosen_texts.append(b.normalized_text)
             chosen.append(
-                BulletRef(text=b.source_text, fact_id=b.id, normalized=b.normalized_text)
+                BulletRef(
+                    text=b.source_text, fact_id=b.id, normalized=b.normalized_text
+                )
             )
             if len(chosen) >= bullets_per_role:
                 break
@@ -214,6 +262,7 @@ def _build_experience_entries(
                 parent_key=key,
             )
         )
+    entries.sort(key=_role_sort_key, reverse=True)
     return entries
 
 
@@ -235,7 +284,10 @@ def _build_project_entries(
     bullets = [
         f
         for f in facts
-        if f.section == "projects" and f.fact_kind == "bullet" and f.usable and f.parent_key
+        if f.section == "projects"
+        and f.fact_kind == "bullet"
+        and f.usable
+        and f.parent_key
     ]
     by_key: dict[str, list[ResumeFact]] = defaultdict(list)
     for b in bullets:
@@ -263,7 +315,9 @@ def _build_project_entries(
             continue
         techs = None
         if header and header.skills_json:
-            techs = ", ".join(sorted({normalize_skill_token(s) for s in header.skills_json}))
+            techs = ", ".join(
+                sorted({normalize_skill_token(s) for s in header.skills_json})
+            )
         chosen: list[BulletRef] = []
         chosen_texts: list[str] = []
         for b in sorted(
@@ -277,7 +331,9 @@ def _build_project_entries(
             used_norms.add(b.normalized_text)
             chosen_texts.append(b.normalized_text)
             chosen.append(
-                BulletRef(text=b.source_text, fact_id=b.id, normalized=b.normalized_text)
+                BulletRef(
+                    text=b.source_text, fact_id=b.id, normalized=b.normalized_text
+                )
             )
             if len(chosen) >= bullets_per:
                 break
@@ -410,19 +466,26 @@ def build_resume_document(
     prefer_baseline_docs: bool = True,
 ) -> ResumeDocument:
     docs = {d.id: d for d in session.query(ResumeSourceDocument).all()}
-    facts = (
-        session.query(ResumeFact)
-        .filter(ResumeFact.usable.is_(True))
-        .all()
-    )
+    company_specific_ids = {
+        d.id for d in docs.values() if d.track == "company_specific_reference"
+    }
+    raw_facts = session.query(ResumeFact).filter(ResumeFact.usable.is_(True)).all()
+    # Company-specific resumes are supporting evidence only when corroborated
+    facts = [
+        f
+        for f in raw_facts
+        if f.source_document_id not in company_specific_ids
+        or f.verification_state == "corroborated"
+    ]
     # Prefer baseline track sources for headers/skills when available
     if prefer_baseline_docs:
         baseline_ids = {
-            d.id for d in docs.values() if d.track == track and d.track != "company_specific_reference"
+            d.id
+            for d in docs.values()
+            if d.track == track and d.track != "company_specific_reference"
         }
         if baseline_ids:
             baseline_facts = [f for f in facts if f.source_document_id in baseline_ids]
-            # Merge: baseline first for skills/education structure, all usable for bullets
             skill_source = baseline_facts or facts
         else:
             skill_source = facts
@@ -432,7 +495,11 @@ def build_resume_document(
     # Exclude company-specific-only unverified for skills already handled by usable flag
     contact = None
     for fact in facts:
-        if fact.section == "other" and "@" in fact.source_text and len(fact.source_text) < 160:
+        if (
+            fact.section == "other"
+            and "@" in fact.source_text
+            and len(fact.source_text) < 160
+        ):
             contact = fact.source_text.replace("•", "|")
             break
 

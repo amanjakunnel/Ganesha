@@ -51,7 +51,9 @@ def session() -> Session:
         db.close()
 
 
-def _job(session: Session, *, title: str, description: str, url: str = "https://x.test/a") -> JobPosting:
+def _job(
+    session: Session, *, title: str, description: str, url: str = "https://x.test/a"
+) -> JobPosting:
     company = Company(
         canonical_name=f"Co-{make_uuid()[:8]}",
         normalized_key=make_uuid()[:8],
