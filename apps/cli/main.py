@@ -48,6 +48,10 @@ from apps.cli.dashboard_commands import dashboard_app  # noqa: E402
 
 app.add_typer(dashboard_app, name="dashboard")
 
+from apps.cli.resume_commands import resumes_app  # noqa: E402
+
+app.add_typer(resumes_app, name="resumes")
+
 
 @app.command("db-doctor", hidden=True)
 def db_doctor_legacy() -> None:
