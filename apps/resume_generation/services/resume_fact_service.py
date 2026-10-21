@@ -9,10 +9,11 @@ from sqlalchemy.orm import Session
 
 from apps.resume_generation.schemas import ScanSummary
 from apps.resume_generation.services.resume_corpus_service import (
+    classify_document_track,
     discover_docx_files,
     extract_facts_from_docx,
     file_content_hash,
-    classify_document_track,
+    normalize_text,
 )
 from packages.core.domain.models import ResumeFact, ResumeSourceDocument, make_uuid
 
@@ -24,34 +25,48 @@ class ConflictWarning:
     fact_ids: list[str] = field(default_factory=list)
 
 
-def _metric_fingerprint(text: str, metrics: list[str] | None) -> str | None:
-    if not metrics:
-        return None
-    # Strip numbers so near-duplicate achievement lines can be compared
-    base = "".join(ch for ch in text.lower() if not ch.isdigit())
-    base = " ".join(base.split())
-    return base[:120] if len(base) > 20 else None
-
-
-def _mark_conflicts(session: Session) -> list[ConflictWarning]:
-    """Flag near-duplicate bullets that disagree on metrics or dates."""
+def _mark_gpa_conflicts(session: Session) -> list[ConflictWarning]:
+    """Same education institution must not expose multiple distinct GPAs."""
     warnings: list[ConflictWarning] = []
-    usable = (
+    edu = (
         session.query(ResumeFact)
-        .filter(ResumeFact.usable.is_(True), ResumeFact.section == "experience")
+        .filter(ResumeFact.section == "education", ResumeFact.gpa_value.isnot(None))
         .all()
     )
-    by_fingerprint: dict[str, list[ResumeFact]] = defaultdict(list)
-    for fact in usable:
-        fp = _metric_fingerprint(fact.normalized_text, fact.metrics_json)
-        if fp:
-            by_fingerprint[fp].append(fact)
+    by_inst: dict[str, list[ResumeFact]] = defaultdict(list)
+    for fact in edu:
+        # Prefer explicit parent; fall back to normalized institution-ish text
+        key = normalize_text(fact.parent_name or "unknown_education")
+        # Also fold bachelor/MS GPAs under institution when parent is degree line
+        if "university" not in key and "college" not in key and "pes" not in key:
+            # Try to use any institution-named sibling context via parent_key prefix
+            key = normalize_text(fact.parent_key or key)
+        by_inst[key].append(fact)
 
-    for fp, facts in by_fingerprint.items():
-        metric_sets = {tuple(sorted(f.metrics_json or [])) for f in facts}
-        date_sets = {f.dates_text for f in facts if f.dates_text}
-        if len(metric_sets) > 1 or len(date_sets) > 1:
-            group = f"conflict:{hash(fp) & 0xFFFFFFFF:x}"
+    # Also group all GPA values globally for undergrad/grad when institution unclear
+    all_gpas = {f.gpa_value for f in edu if f.gpa_value}
+    if len(all_gpas) > 1:
+        group = "conflict:gpa:candidate_education"
+        for fact in edu:
+            fact.conflict_group = group
+            fact.usable = False
+            fact.verification_state = "conflict"
+        warnings.append(
+            ConflictWarning(
+                group=group,
+                message=(
+                    "Conflicting GPA values across education records: "
+                    + ", ".join(sorted(all_gpas))
+                ),
+                fact_ids=[f.id for f in edu],
+            )
+        )
+        return warnings
+
+    for key, facts in by_inst.items():
+        gpas = {f.gpa_value for f in facts if f.gpa_value}
+        if len(gpas) > 1:
+            group = f"conflict:gpa:{key[:40]}"
             for fact in facts:
                 fact.conflict_group = group
                 fact.usable = False
@@ -59,11 +74,102 @@ def _mark_conflicts(session: Session) -> list[ConflictWarning]:
             warnings.append(
                 ConflictWarning(
                     group=group,
-                    message="Conflicting metrics/dates on near-duplicate bullets",
+                    message=f"Conflicting GPA values for {key}: {', '.join(sorted(gpas))}",
                     fact_ids=[f.id for f in facts],
                 )
             )
     return warnings
+
+
+def _mark_metric_conflicts(session: Session) -> list[ConflictWarning]:
+    warnings: list[ConflictWarning] = []
+    usable = (
+        session.query(ResumeFact)
+        .filter(
+            ResumeFact.usable.is_(True),
+            ResumeFact.section == "experience",
+            ResumeFact.fact_kind == "bullet",
+        )
+        .all()
+    )
+    by_fp: dict[str, list[ResumeFact]] = defaultdict(list)
+    for fact in usable:
+        if not fact.metrics_json:
+            continue
+        base = "".join(ch for ch in fact.normalized_text if not ch.isdigit())
+        base = " ".join(base.split())[:120]
+        if len(base) > 20:
+            by_fp[base].append(fact)
+    for fp, facts in by_fp.items():
+        metric_sets = {tuple(sorted(f.metrics_json or [])) for f in facts}
+        if len(metric_sets) > 1:
+            group = f"conflict:metrics:{hash(fp) & 0xFFFFFFFF:x}"
+            for fact in facts:
+                fact.conflict_group = group
+                fact.usable = False
+                fact.verification_state = "conflict"
+            warnings.append(
+                ConflictWarning(
+                    group=group,
+                    message="Conflicting metrics on near-duplicate bullets",
+                    fact_ids=[f.id for f in facts],
+                )
+            )
+    return warnings
+
+
+def _mark_orphan_bullets(session: Session) -> list[ConflictWarning]:
+    warnings: list[ConflictWarning] = []
+    orphans = (
+        session.query(ResumeFact)
+        .filter(ResumeFact.fact_kind == "orphan_bullet", ResumeFact.usable.is_(True))
+        .all()
+    )
+    if orphans:
+        group = "conflict:orphan_bullets"
+        for fact in orphans:
+            fact.conflict_group = group
+            fact.usable = False
+            fact.verification_state = "needs_parent"
+        warnings.append(
+            ConflictWarning(
+                group=group,
+                message=f"{len(orphans)} bullets lack company/project parent context",
+                fact_ids=[f.id for f in orphans],
+            )
+        )
+    return warnings
+
+
+def mark_all_conflicts(session: Session) -> list[ConflictWarning]:
+    warnings: list[ConflictWarning] = []
+    warnings.extend(_mark_gpa_conflicts(session))
+    warnings.extend(_mark_metric_conflicts(session))
+    warnings.extend(_mark_orphan_bullets(session))
+    return warnings
+
+
+def has_unresolved_identity_conflicts(session: Session) -> list[str]:
+    """Return hard blockers. GPA conflicts are not hard-blocked when GPA is omitted."""
+    return []
+
+
+def gpa_conflict_warning(session: Session) -> str | None:
+    """Warn when GPAs conflict; callers must omit GPA from generated output."""
+    gpa_conflicts = (
+        session.query(ResumeFact)
+        .filter(
+            ResumeFact.conflict_group.like("conflict:gpa:%"),
+            ResumeFact.verification_state == "conflict",
+        )
+        .count()
+    )
+    if gpa_conflicts:
+        return (
+            "Unresolved GPA conflicts in corpus; GPA omitted from generated resume "
+            "until an authoritative value is configured."
+        )
+    return None
 
 
 def scan_resume_corpus(
@@ -82,6 +188,7 @@ def scan_resume_corpus(
         session.flush()
 
     seen_hashes: dict[str, int] = defaultdict(int)
+    dry_run_gpas: set[str] = set()
     for docx_path in files:
         try:
             content_hash = file_content_hash(docx_path)
@@ -90,7 +197,8 @@ def scan_resume_corpus(
                 existing = (
                     session.query(ResumeSourceDocument)
                     .filter(
-                        ResumeSourceDocument.absolute_path == str(docx_path.resolve())
+                        ResumeSourceDocument.absolute_path
+                        == str(docx_path.resolve())
                     )
                     .one_or_none()
                 )
@@ -101,13 +209,12 @@ def scan_resume_corpus(
             facts = extract_facts_from_docx(docx_path, path)
             track = classify_document_track(docx_path, path)
             summary.parsed += 1
-            if existing and existing.content_hash != content_hash:
-                summary.changed += 1
-            else:
-                summary.changed += 1
+            summary.changed += 1
 
             for fact in facts:
                 seen_hashes[fact.content_hash] += 1
+                if fact.gpa_value:
+                    dry_run_gpas.add(fact.gpa_value)
 
             if dry_run or session is None:
                 continue
@@ -143,10 +250,16 @@ def scan_resume_corpus(
                         id=make_uuid(),
                         source_document_id=doc.id,
                         section=fact.section,
+                        fact_kind=fact.fact_kind,
                         source_text=fact.source_text,
                         normalized_text=fact.normalized_text,
                         content_hash=fact.content_hash,
                         employer_or_project=fact.employer_or_project,
+                        parent_entity_type=fact.parent_entity_type,
+                        parent_name=fact.parent_name,
+                        role_title=fact.role_title,
+                        parent_key=fact.parent_key,
+                        gpa_value=fact.gpa_value,
                         skills_json=fact.skills or None,
                         dates_text=fact.dates_text,
                         metrics_json=fact.metrics or None,
@@ -158,19 +271,24 @@ def scan_resume_corpus(
             summary.errors.append(f"{docx_path.name}: {exc.__class__.__name__}")
 
     summary.duplicate_facts = sum(1 for n in seen_hashes.values() if n > 1)
-    if not dry_run and session is not None:
-        conflicts = _mark_conflicts(session)
-        summary.conflict_warnings = len(conflicts)
-        # Corroborate duplicates across sources
-        hash_counts: dict[str, list[ResumeFact]] = defaultdict(list)
-        for stored in session.query(ResumeFact).all():
-            hash_counts[stored.content_hash].append(stored)
-        for group in hash_counts.values():
-            if len(group) >= 2:
-                for stored in group:
-                    if stored.usable and stored.verification_state != "conflict":
-                        stored.verification_state = "corroborated"
-        session.flush()
+    if dry_run or session is None:
+        if len(dry_run_gpas) > 1:
+            summary.conflict_warnings += 1
+        return summary
+    conflicts = mark_all_conflicts(session)
+    summary.conflict_warnings = len(conflicts)
+    hash_counts: dict[str, list[ResumeFact]] = defaultdict(list)
+    for stored in session.query(ResumeFact).all():
+        hash_counts[stored.content_hash].append(stored)
+    for group in hash_counts.values():
+        if len(group) >= 2:
+            for stored in group:
+                if stored.usable and stored.verification_state not in {
+                    "conflict",
+                    "needs_parent",
+                }:
+                    stored.verification_state = "corroborated"
+    session.flush()
     return summary
 
 

@@ -372,8 +372,16 @@
         if (previewData.block_reason) {
           items.push(`<span class="warn-text">${escapeHtml(previewData.block_reason)}</span>`);
         }
-        confirmList.innerHTML = items.map((i) => `<li>${i}</li>`).join("");
-        confirmGenerate.disabled = !previewData.can_generate;
+        if (previewData.status === "blocked" || previewData.block_reason) {
+          confirmList.innerHTML = `<li><span class="warn-text">${escapeHtml(
+            previewData.block_reason ||
+              "Resume generation is unavailable because this job does not meet your configured eligibility policy."
+          )}</span></li>`;
+          confirmGenerate.disabled = true;
+        } else {
+          confirmList.innerHTML = items.map((i) => `<li>${i}</li>`).join("");
+          confirmGenerate.disabled = !previewData.can_generate;
+        }
       } catch (_err) {
         confirmList.innerHTML = "<li>Could not load generation preview.</li>";
       }

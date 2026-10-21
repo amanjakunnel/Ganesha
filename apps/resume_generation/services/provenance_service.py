@@ -2,19 +2,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from apps.resume_generation.schemas import ResumeStrategy, ValidationReport
-from apps.resume_generation.services.resume_composer_service import ComposedResume
+from apps.resume_generation.schemas import ResumeDocument, ResumeStrategy, ValidationReport
 
 
 def build_audit_payload(
     *,
     strategy: ResumeStrategy,
-    composed: ComposedResume | None,
+    composed: ResumeDocument | None,
     validation: ValidationReport | None,
     template_version: str,
     job_description_hash: str,
 ) -> dict[str, Any]:
-    """Non-secret audit summary suitable for DB storage."""
     return {
         "track": strategy.track,
         "reason": strategy.reason,
@@ -26,6 +24,16 @@ def build_audit_payload(
         "model": strategy.model,
         "template_version": template_version,
         "job_description_hash": job_description_hash,
+        "structure": (
+            {
+                "experience_roles": len(composed.experience),
+                "projects": len(composed.projects),
+                "education": len(composed.education),
+                "skill_lines": len(composed.skill_lines),
+            }
+            if composed
+            else None
+        ),
         "validation": (
             {
                 "ok": validation.ok,
@@ -33,6 +41,7 @@ def build_audit_payload(
                 "docx_ok": validation.docx_ok,
                 "pdf_ok": validation.pdf_ok,
                 "text_ok": validation.text_ok,
+                "structural_ok": validation.structural_ok,
                 "messages": validation.messages,
             }
             if validation

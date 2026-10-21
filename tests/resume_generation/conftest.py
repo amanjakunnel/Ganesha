@@ -4,7 +4,25 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from docx import Document
+from sqlalchemy.orm import Session
+
+from packages.core.db import SessionLocal, get_engine
+from packages.core.domain.models import Base
+
+
+@pytest.fixture()
+def resume_db_session() -> Session:
+    """Fresh schema for resume-generation tests (sqlite)."""
+    engine = get_engine()
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 def write_resume_docx(path: Path, *, sections: dict[str, list[str]]) -> Path:
@@ -21,70 +39,124 @@ def write_resume_docx(path: Path, *, sections: dict[str, list[str]]) -> Path:
 
 
 def build_standard_corpus(root: Path) -> Path:
-    """Create a small multi-track corpus under root."""
+    """Create a small multi-track corpus with proper parent headers."""
     write_resume_docx(
         root / "Current_Resume_Dev.docx",
         sections={
-            "Skills": ["Python, Java, SQL, Git, Docker"],
+            "Skills": [
+                "Languages: Python, Java, JavaScript, SQL",
+                "Cloud & DevOps: Docker, Git, Jenkins",
+            ],
             "Experience": [
-                "Software Engineer, Acme Corp  Jan 2022 – Present",
+                "Acme Corp | Software Engineer | Jan 2022 – Present",
                 "Built REST APIs in Python serving internal tooling.",
                 "Improved CI/CD pipelines with Jenkins and Git.",
             ],
             "Projects": [
-                "TacoDB — C++ disk-based relational DBMS with buffer management "
-                "and persistent B+-Tree indexing."
+                "TacoDB | C++, SQL",
+                "Implemented a C++ disk-based relational DBMS with buffer management.",
+                "Added persistent B+-Tree indexing and query optimization.",
             ],
-            "Education": ["B.S. Computer Science, Example University  May 2024"],
+            "Education": [
+                "The Pennsylvania State University | Master of Science | Aug 2025 – May 2027",
+                "Major in Computer Science and Engineering",
+                "PES University | Bachelor of Technology | Aug 2019 – Jun 2023",
+                "Major in Computer Science and Engineering GPA: 3.5/4.0",
+            ],
         },
     )
     write_resume_docx(
         root / "Current_Resume_Cloud.docx",
         sections={
-            "Skills": ["AWS, Kubernetes, Linux, Terraform, Docker"],
+            "Skills": [
+                "Languages: Python, Shell",
+                "Cloud & DevOps: AWS, Kubernetes, Linux, Terraform, Docker",
+            ],
             "Experience": [
-                "Cloud Engineer Intern, CloudCo  Jun 2023 – Aug 2023",
+                "CloudCo | Cloud Engineer Intern | Jun 2023 – Aug 2023",
                 "Operated Linux services on AWS with Kubernetes deployments.",
                 "Automated release engineering scripts for containerized apps.",
             ],
-            "Education": ["B.S. Computer Science, Example University  May 2024"],
+            "Projects": [
+                "InfraLab | Terraform, AWS",
+                "Provisioned reproducible cloud environments with Terraform.",
+            ],
+            "Education": [
+                "The Pennsylvania State University | Master of Science | Aug 2025 – May 2027",
+                "PES University | Bachelor of Technology | Aug 2019 – Jun 2023",
+                "Major in Computer Science and Engineering GPA: 3.5/4.0",
+            ],
         },
     )
     write_resume_docx(
         root / "Current_Resume_ML.docx",
         sections={
-            "Skills": ["Python, PyTorch, scikit-learn, SQL"],
+            "Skills": [
+                "Languages: Python",
+                "Data & ML: PyTorch, scikit-learn, SQL",
+            ],
             "Experience": [
-                "ML Intern, ModelLabs  May 2022 – Aug 2022",
+                "ModelLabs | ML Intern | May 2022 – Aug 2022",
                 "Trained classification models in PyTorch for research prototypes.",
             ],
-            "Education": ["B.S. Computer Science, Example University  May 2024"],
+            "Education": [
+                "PES University | Bachelor of Technology | Aug 2019 – Jun 2023",
+                "Major in Computer Science and Engineering GPA: 3.5/4.0",
+            ],
         },
     )
     write_resume_docx(
         root / "Current_Resume.docx",
         sections={
-            "Skills": ["Python, Java, SQL"],
+            "Skills": ["Languages: Python, Java, SQL"],
             "Experience": [
-                "Software Engineer, Acme Corp  Jan 2022 – Present",
+                "Acme Corp | Software Engineer | Jan 2022 – Present",
                 "Built REST APIs in Python serving internal tooling.",
             ],
-            "Education": ["B.S. Computer Science, Example University  May 2024"],
+            "Education": [
+                "PES University | Bachelor of Technology | Aug 2019 – Jun 2023",
+                "Major in Computer Science and Engineering GPA: 3.5/4.0",
+            ],
         },
     )
     write_resume_docx(
         root / "Company Specific" / "Acme_Tailored.docx",
         sections={
-            "Skills": ["Python, Java"],
+            "Skills": ["Languages: Python, Java"],
             "Experience": [
-                "Software Engineer, Acme Corp  Jan 2022 – Present",
+                "Acme Corp | Software Engineer | Jan 2022 – Present",
                 "Delivered features exclusively for Acme secret product X (unverified claim).",
             ],
-            "Education": ["B.S. Computer Science, Example University  May 2024"],
+            "Education": [
+                "PES University | Bachelor of Technology | Aug 2019 – Jun 2023",
+                "Major in Computer Science and Engineering GPA: 3.5/4.0",
+            ],
         },
     )
-    # Noise files that must be ignored
     (root / "ignore_me.pdf").write_bytes(b"%PDF-1.4 fake")
     (root / "~$Current_Resume_Dev.docx").write_bytes(b"lock")
     (root / "notes.txt").write_text("not a resume", encoding="utf-8")
+    return root
+
+
+def build_conflicting_gpa_corpus(root: Path) -> Path:
+    build_standard_corpus(root)
+    write_resume_docx(
+        root / "GPA_Conflict_36.docx",
+        sections={
+            "Education": [
+                "PES University | Bachelor of Technology | Aug 2019 – Jun 2023",
+                "Major in Computer Science and Engineering GPA: 3.6/4.0",
+            ],
+        },
+    )
+    write_resume_docx(
+        root / "GPA_Conflict_37.docx",
+        sections={
+            "Education": [
+                "PES University | Bachelor of Technology | Aug 2019 – Jun 2023",
+                "Major in Computer Science and Engineering GPA: 3.7/4.0",
+            ],
+        },
+    )
     return root

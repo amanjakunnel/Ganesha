@@ -366,7 +366,7 @@ class ResumeSourceDocument(Base):
 
 
 class ResumeFact(Base):
-    """Extracted resume bullet/fact with provenance."""
+    """Extracted resume bullet/fact with provenance and parent entity context."""
 
     __tablename__ = "resume_facts"
 
@@ -375,10 +375,16 @@ class ResumeFact(Base):
         String(36), ForeignKey("resume_source_documents.id")
     )
     section: Mapped[str] = mapped_column(String(64))
+    fact_kind: Mapped[str] = mapped_column(String(32), default="bullet")
     source_text: Mapped[str] = mapped_column(Text)
     normalized_text: Mapped[str] = mapped_column(Text)
     content_hash: Mapped[str] = mapped_column(String(128))
     employer_or_project: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    parent_entity_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    parent_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    role_title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    parent_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    gpa_value: Mapped[str | None] = mapped_column(String(32), nullable=True)
     skills_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     dates_text: Mapped[str | None] = mapped_column(String(255), nullable=True)
     metrics_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
@@ -394,6 +400,7 @@ class ResumeFact(Base):
     __table_args__ = (
         Index("ix_resume_facts_hash", "content_hash"),
         Index("ix_resume_facts_source", "source_document_id"),
+        Index("ix_resume_facts_parent_key", "parent_key"),
     )
 
 
@@ -421,6 +428,7 @@ class ResumeGeneration(Base):
     warnings_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     gaps_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quality_status: Mapped[str] = mapped_column(String(32), default="active")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

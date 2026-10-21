@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import re
 import shutil
+from collections import Counter
 from pathlib import Path
 
 from pypdf import PdfReader
 
-from apps.resume_generation.schemas import ValidationReport
+from apps.resume_generation.schemas import ResumeDocument, ValidationReport
 from apps.resume_generation.services.docx_render_service import extract_docx_text
+from apps.resume_generation.services.resume_corpus_service import normalize_text
 
 FORBIDDEN_SNIPPETS = (
     "prompt version",
@@ -20,9 +22,10 @@ FORBIDDEN_SNIPPETS = (
     "source_document",
     "fact_id",
     "ganesha debug",
+    "eligibility policy",
+    "f-1",
+    "ts/sci",
 )
-
-REQUIRED_MARKERS = ("experience", "education")
 
 
 def pdf_page_count(path: Path) -> int:
@@ -51,17 +54,71 @@ def is_valid_pdf(path: Path) -> bool:
         return False
 
 
+def _count_heading(text: str, heading: str) -> int:
+    pattern = re.compile(rf"^{re.escape(heading)}\s*$", re.IGNORECASE | re.MULTILINE)
+    return len(pattern.findall(text))
+
+
+def _structural_checks(docx_text: str, document: ResumeDocument | None) -> list[str]:
+    messages: list[str] = []
+    for heading in ("SKILLS", "EXPERIENCE", "EDUCATION"):
+        count = _count_heading(docx_text, heading)
+        if count != 1:
+            messages.append(f"Expected exactly one {heading} heading, found {count}")
+    if document and document.projects:
+        count = _count_heading(docx_text, "PROJECTS")
+        if count != 1:
+            messages.append(f"Expected exactly one PROJECTS heading, found {count}")
+
+    lines = [ln.strip() for ln in docx_text.splitlines() if ln.strip()]
+    # Detect orphan bullets: bullet-like line before any experience header content
+    # Simple duplicate line detection
+    norms = [normalize_text(ln) for ln in lines if len(ln) > 20]
+    dupes = [n for n, c in Counter(norms).items() if c > 1]
+    if dupes:
+        messages.append(f"Duplicate normalized lines detected ({len(dupes)})")
+
+    # GPA conflict visible in output
+    gpas = set(re.findall(r"GPA[:\s]*([0-9]\.[0-9])", docx_text, flags=re.I))
+    gpas |= set(re.findall(r"\b(3\.[567])\s*/\s*4", docx_text))
+    if len(gpas) > 1:
+        messages.append(f"Multiple GPA values rendered: {', '.join(sorted(gpas))}")
+
+    if document:
+        for exp in document.experience:
+            if exp.company and exp.company not in docx_text:
+                messages.append(f"Missing experience company in DOCX: {exp.company}")
+        for proj in document.projects:
+            if proj.name and proj.name not in docx_text:
+                messages.append(f"Missing project name in DOCX: {proj.name}")
+
+    # Skill duplication across skill lines
+    if document:
+        skill_tokens: list[str] = []
+        for line in document.skill_lines:
+            if ":" in line:
+                for tok in line.split(":", 1)[1].split(","):
+                    skill_tokens.append(normalize_text(tok))
+        if len(skill_tokens) != len(set(skill_tokens)):
+            messages.append("Duplicate skills in structured document")
+
+    return messages
+
+
 def validate_artifacts(
     *,
     docx_path: Path,
     pdf_path: Path,
     expected_name: str = "Alex Michael Manjakunnel",
+    document: ResumeDocument | None = None,
 ) -> ValidationReport:
     messages: list[str] = []
     docx_ok = False
     pdf_ok = False
     text_ok = False
+    structural_ok = False
     page_count: int | None = None
+    docx_text = ""
 
     try:
         docx_text = extract_docx_text(docx_path)
@@ -70,7 +127,10 @@ def validate_artifacts(
             messages.append("DOCX text extraction is empty")
     except Exception as exc:
         messages.append(f"DOCX parse failed: {exc.__class__.__name__}")
-        docx_text = ""
+
+    structural_msgs = _structural_checks(docx_text, document) if docx_text else []
+    messages.extend(structural_msgs)
+    structural_ok = docx_ok and not structural_msgs
 
     if not pdf_path.exists():
         messages.append("PDF file missing")
@@ -91,40 +151,41 @@ def validate_artifacts(
                 combined = f"{docx_text}\n{pdf_text}".lower()
                 if expected_name.lower() not in combined:
                     messages.append("Candidate name missing from extracted text")
-                missing = [m for m in REQUIRED_MARKERS if m not in combined]
-                if missing:
-                    messages.append(
-                        f"Missing sections in extracted text: {', '.join(missing)}"
-                    )
+                for marker in ("experience", "education", "skills"):
+                    if marker not in combined:
+                        messages.append(f"Missing section in extracted text: {marker}")
                 for snippet in FORBIDDEN_SNIPPETS:
                     if snippet in combined:
                         messages.append(f"Forbidden internal content leaked: {snippet}")
-                # Decorative / odd bullets
                 if re.search(r"[\u2600-\u27BF]", pdf_text):
                     messages.append("Unusual Unicode decorative characters detected")
                 text_ok = (
                     expected_name.lower() in combined
-                    and not missing
+                    and "experience" in combined
+                    and "education" in combined
+                    and "skills" in combined
                     and not any(s in combined for s in FORBIDDEN_SNIPPETS)
                 )
         except Exception as exc:
             messages.append(f"PDF validation failed: {exc.__class__.__name__}")
 
-    ok = docx_ok and pdf_ok and text_ok and not messages
+    # Exclude success note from failure condition
+    failure_msgs = [m for m in messages if not m.startswith("Validation passed")]
+    ok = docx_ok and pdf_ok and text_ok and structural_ok and not failure_msgs
     if ok:
-        messages.append("Validation passed: one-page ATS-readable PDF")
+        messages.append("Validation passed: one-page ATS-readable structured PDF")
     return ValidationReport(
         ok=ok,
         page_count=page_count,
         docx_ok=docx_ok,
         pdf_ok=pdf_ok,
         text_ok=text_ok,
+        structural_ok=structural_ok,
         messages=messages,
     )
 
 
 def atomic_copy_to_desktop(src_pdf: Path, desktop_path: Path) -> Path:
-    """Atomically replace Desktop PDF only after validating the source."""
     if not is_valid_pdf(src_pdf):
         raise RuntimeError("Refusing Desktop copy: source PDF invalid")
     if pdf_page_count(src_pdf) != 1:

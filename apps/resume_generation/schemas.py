@@ -10,7 +10,13 @@ class ExtractedFact:
     source_text: str
     normalized_text: str
     content_hash: str
+    fact_kind: str = "bullet"
     employer_or_project: str | None = None
+    parent_entity_type: str | None = None
+    parent_name: str | None = None
+    role_title: str | None = None
+    parent_key: str | None = None
+    gpa_value: str | None = None
     skills: list[str] = field(default_factory=list)
     dates_text: str | None = None
     metrics: list[str] = field(default_factory=list)
@@ -36,6 +42,59 @@ class RequirementSet:
 
 
 @dataclass
+class BulletRef:
+    text: str
+    fact_id: str
+    normalized: str
+
+
+@dataclass
+class ExperienceEntry:
+    company: str
+    title: str
+    dates: str
+    bullets: list[BulletRef] = field(default_factory=list)
+    parent_key: str = ""
+    location: str | None = None
+
+
+@dataclass
+class ProjectEntry:
+    name: str
+    bullets: list[BulletRef] = field(default_factory=list)
+    technologies: str | None = None
+    date_range: str | None = None
+    parent_key: str = ""
+
+
+@dataclass
+class EducationEntry:
+    institution: str
+    degree: str
+    major: str | None = None
+    graduation_date: str | None = None
+    gpa: str | None = None
+    coursework: str | None = None
+    parent_key: str = ""
+    fact_ids: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ResumeDocument:
+    name_line: str
+    contact_line: str | None
+    summary: str | None
+    skill_lines: list[str] = field(default_factory=list)
+    experience: list[ExperienceEntry] = field(default_factory=list)
+    projects: list[ProjectEntry] = field(default_factory=list)
+    education: list[EducationEntry] = field(default_factory=list)
+    fact_ids: list[str] = field(default_factory=list)
+    source_files: list[str] = field(default_factory=list)
+    omit_reasons: list[str] = field(default_factory=list)
+    track: str = "general"
+
+
+@dataclass
 class ResumeStrategy:
     track: str
     reason: str
@@ -46,6 +105,8 @@ class ResumeStrategy:
     warnings: list[str]
     provider: str = "deterministic"
     model: str | None = None
+    document: ResumeDocument | None = None
+    block_reason: str | None = None
 
 
 @dataclass
@@ -56,6 +117,7 @@ class ValidationReport:
     pdf_ok: bool
     text_ok: bool
     messages: list[str] = field(default_factory=list)
+    structural_ok: bool = False
 
 
 @dataclass

@@ -6,46 +6,16 @@ from apps.resume_generation.schemas import ResumeStrategy
 from apps.resume_generation.services.job_requirement_service import (
     extract_job_requirements,
 )
-from apps.resume_generation.services.resume_fact_service import usable_facts
-from apps.resume_generation.services.semantic_provider import (
-    get_semantic_provider,
+from apps.resume_generation.services.semantic_provider import get_semantic_provider
+from apps.resume_generation.services.resume_fact_service import gpa_conflict_warning
+from apps.resume_generation.services.structured_document_service import (
+    build_resume_document,
+    validate_document_structure,
 )
-from packages.core.domain.models import JobPosting, ResumeFact, ResumeSourceDocument
+from packages.core.domain.models import JobPosting, ResumeSourceDocument
 from packages.core.settings import settings
 
 TRACK_PRIORITY = ("dev", "cloud", "ml", "csharp", "general")
-
-
-def _score_fact(fact: ResumeFact, keywords: list[str]) -> int:
-    text = fact.normalized_text
-    score = 0
-    for kw in keywords:
-        if kw in text:
-            score += 2
-    for skill in fact.skills_json or []:
-        if skill.lower() in keywords:
-            score += 3
-    if fact.verification_state == "corroborated":
-        score += 1
-    if fact.section in {"experience", "projects", "skills"}:
-        score += 1
-    return score
-
-
-def _contact_and_education(facts: list[ResumeFact]) -> dict[str, list[ResumeFact]]:
-    buckets: dict[str, list[ResumeFact]] = {
-        "header": [],
-        "education": [],
-        "skills": [],
-        "experience": [],
-        "projects": [],
-    }
-    for fact in facts:
-        if fact.section == "other" and len(buckets["header"]) < 3:
-            buckets["header"].append(fact)
-        elif fact.section in buckets:
-            buckets[fact.section].append(fact)
-    return buckets
 
 
 def build_resume_strategy(
@@ -67,81 +37,46 @@ def build_resume_strategy(
         )
 
     track = track_override or req.role_family
-    if track not in TRACK_PRIORITY and track != "csharp":
+    if track not in (*TRACK_PRIORITY, "csharp"):
         track = "general"
 
-    facts = usable_facts(session)
-    if not facts:
+    baseline = (
+        session.query(ResumeSourceDocument)
+        .filter(ResumeSourceDocument.track == track)
+        .first()
+    )
+    if baseline is None and track != "general":
+        baseline = (
+            session.query(ResumeSourceDocument)
+            .filter(ResumeSourceDocument.track == "general")
+            .first()
+        )
+        if baseline:
+            warnings.append(
+                f"No '{track}' baseline DOCX indexed; falling back to general structure."
+            )
+            track = "general"
+
+    document = build_resume_document(session, track=track, keywords=req.keywords)
+    gpa_warn = gpa_conflict_warning(session)
+    if gpa_warn:
+        warnings.append(gpa_warn)
+        for ed in document.education:
+            ed.gpa = None
+    structure_errors = validate_document_structure(document)
+    if structure_errors:
         return ResumeStrategy(
             track=track,
-            reason="No scanned resume facts available. Run resumes scan first.",
-            selected_fact_ids=[],
-            source_files=[],
+            reason="Structured plan failed validation gates.",
+            selected_fact_ids=document.fact_ids,
+            source_files=document.source_files,
             outline={},
-            gaps=["No resume corpus facts loaded"],
-            warnings=warnings + ["Cannot generate without scanned DOCX evidence."],
+            gaps=gaps,
+            warnings=warnings + structure_errors,
             provider=provider_name,
+            document=document,
+            block_reason=structure_errors[0],
         )
-
-    # Prefer baseline track documents, then corroborated others (never company-specific alone)
-    docs = {d.id: d for d in session.query(ResumeSourceDocument).all()}
-    baseline_ids = {
-        d.id
-        for d in docs.values()
-        if d.track == track and d.track != "company_specific_reference"
-    }
-    scored: list[tuple[int, ResumeFact]] = []
-    for fact in facts:
-        doc = docs.get(fact.source_document_id)
-        if doc and doc.track == "company_specific_reference":
-            # Supporting evidence only when corroborated / overlapping with baseline skills
-            if fact.verification_state != "corroborated":
-                continue
-        score = _score_fact(fact, req.keywords)
-        if baseline_ids and fact.source_document_id in baseline_ids:
-            score += 2
-        if (
-            score > 0
-            or fact.section in {"education", "skills"}
-            or (fact.section == "other" and len(fact.source_text) < 80)
-        ):
-            scored.append((score, fact))
-    scored.sort(key=lambda x: (-x[0], x[1].section, x[1].source_text))
-
-    selected: list[ResumeFact] = []
-    seen_norm: set[str] = set()
-    for score, fact in scored:
-        if fact.normalized_text in seen_norm:
-            continue
-        seen_norm.add(fact.normalized_text)
-        selected.append(fact)
-        if len(selected) >= 40:
-            break
-
-    # Ensure education/skills/header representation
-    buckets = _contact_and_education(facts)
-    for key in ("header", "education", "skills"):
-        for fact in buckets[key][:4]:
-            if fact.normalized_text not in seen_norm and fact.usable:
-                selected.append(fact)
-                seen_norm.add(fact.normalized_text)
-
-    # Gaps: required keywords with no evidence
-    present = " ".join(f.normalized_text for f in selected)
-    for kw in req.keywords[:20]:
-        if kw not in present and kw in {
-            "kubernetes",
-            "aws",
-            "azure",
-            "gcp",
-            "pytorch",
-            "tensorflow",
-            "terraform",
-            "java",
-            "python",
-            "docker",
-        }:
-            gaps.append(f"No verified evidence for keyword: {kw}")
 
     if not deterministic_only and settings.semantic_fit_provider.lower() != "none":
         provider = get_semantic_provider()
@@ -153,16 +88,14 @@ def build_resume_strategy(
                     track=track,
                     keywords=req.keywords,
                     fact_summaries=[
-                        {"id": f.id, "text": f.source_text[:240], "section": f.section}
-                        for f in selected[:25]
+                        {"id": fid, "text": fid, "section": "selected"}
+                        for fid in document.fact_ids[:25]
                     ],
                 )
                 if enriched:
                     provider_name = enriched.get("provider", provider.name)
                     model_name = enriched.get("model")
-                    # Only accept reordering / gap notes; never new claim text
-                    gap_extra = enriched.get("gaps") or []
-                    for g in gap_extra:
+                    for g in enriched.get("gaps") or []:
                         if isinstance(g, str) and g not in gaps:
                             gaps.append(g)
                     warnings.append(
@@ -170,39 +103,52 @@ def build_resume_strategy(
                     )
             except Exception as exc:
                 warnings.append(
-                    f"Semantic provider unavailable ({exc.__class__.__name__}); used deterministic strategy."
+                    f"Semantic provider unavailable ({exc.__class__.__name__}); "
+                    "used deterministic strategy."
                 )
         else:
             warnings.append(
                 "Semantic provider not configured; used deterministic strategy."
             )
 
-    source_files = sorted(
-        {
-            docs[f.source_document_id].filename
-            for f in selected
-            if f.source_document_id in docs
-        }
+    # Gaps for important missing keywords
+    blob = " ".join(document.skill_lines).lower()
+    blob += " " + " ".join(
+        b.text.lower() for e in document.experience for b in e.bullets
     )
+    for kw in (
+        "kubernetes",
+        "aws",
+        "azure",
+        "gcp",
+        "pytorch",
+        "terraform",
+        "docker",
+        "python",
+    ):
+        if kw in req.keywords and kw not in blob:
+            gaps.append(f"No verified evidence for keyword: {kw}")
+
     reason = (
-        f"Selected baseline track '{track}' from job-title/description signals "
-        f"({req.role_family}); used {len(selected)} verified facts from {len(source_files)} DOCX sources."
+        f"Baseline track '{track}' with {len(document.experience)} experience entries, "
+        f"{len(document.projects)} projects, {len(document.education)} education entries, "
+        f"and {len(document.skill_lines)} skill categories."
     )
     outline = {
-        "header": [f.id for f in selected if f.section == "other"][:3],
-        "skills": [f.id for f in selected if f.section == "skills"][:6],
-        "experience": [f.id for f in selected if f.section == "experience"][:12],
-        "projects": [f.id for f in selected if f.section == "projects"][:6],
-        "education": [f.id for f in selected if f.section == "education"][:8],
+        "skills": document.skill_lines,
+        "experience": [e.parent_key for e in document.experience],
+        "projects": [p.parent_key for p in document.projects],
+        "education": [e.parent_key for e in document.education],
     }
     return ResumeStrategy(
         track=track,
         reason=reason,
-        selected_fact_ids=[f.id for f in selected],
-        source_files=source_files,
+        selected_fact_ids=document.fact_ids,
+        source_files=document.source_files,
         outline=outline,
         gaps=gaps[:12],
         warnings=warnings,
         provider=provider_name,
         model=model_name,
+        document=document,
     )

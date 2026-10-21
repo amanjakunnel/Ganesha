@@ -89,3 +89,14 @@ copied to Desktop.
 Generated bullets must come from scanned DOCX evidence or verified profile facts.
 The generator may reorder and rephrase conservatively; it must not invent
 credentials, employers, dates, metrics, clearances, or tools absent from sources.
+
+## Quality gates
+
+- Jobs excluded by eligibility policy (e.g. clearance/citizenship requirements)
+  cannot generate resumes. The dashboard Actions menu still opens, but generation
+  is blocked with a neutral policy message (no sensitive wording in the feed).
+- Conflicting GPA values are detected during `resumes scan`, stored as conflicts,
+  and omitted from generated output until resolved.
+- Output is a structured document: Skills (one section), Experience roles with
+  company/title/dates, named Projects, and canonical Education entries. Orphan
+  bullets without parent context are rejected.

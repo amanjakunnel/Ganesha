@@ -27,6 +27,7 @@ from tests.resume_generation.conftest import build_standard_corpus
 @pytest.fixture()
 def session() -> Session:
     engine = get_engine()
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
@@ -49,12 +50,13 @@ def _job(session: Session, *, title: str, description: str) -> JobPosting:
         source_name="test",
         title=title,
         company_id=company.id,
-        location="Remote",
+        location="Remote, United States",
         description_text=description,
         description_hash=make_description_hash(description),
         dedupe_key=make_dedupe_key(name, title, "Remote"),
         status="new",
         discovered_at=datetime.now(UTC),
+        company_apply_url="https://example.com/jobs/1",
         source_import_key=f"strat|{make_uuid()}",
     )
     session.add(job)

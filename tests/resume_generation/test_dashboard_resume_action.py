@@ -22,6 +22,7 @@ from packages.core.domain.models import (
 @pytest.fixture()
 def client() -> TestClient:
     engine = get_engine()
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     session = SessionLocal()
     try:
@@ -33,10 +34,17 @@ def client() -> TestClient:
     return TestClient(create_app())
 
 
-def _seed(description: str = "Backend Python API software engineer role " * 15) -> str:
+def _seed(
+    description: str = "Backend Python API software engineer role " * 15,
+    *,
+    title: str = "Software Engineer",
+) -> str:
     session = SessionLocal()
     try:
-        company = Company(canonical_name="DashCo", normalized_key="dashco")
+        company = Company(
+            canonical_name=f"DashCo-{make_uuid()[:6]}",
+            normalized_key=make_uuid()[:8],
+        )
         session.add(company)
         session.flush()
         job_id = make_uuid()
@@ -46,12 +54,12 @@ def _seed(description: str = "Backend Python API software engineer role " * 15) 
                 source="csv_import",
                 source_name="linkedin",
                 source_type="csv_import",
-                title="Software Engineer",
+                title=title,
                 company_id=company.id,
-                location="Remote",
+                location="Remote, United States",
                 description_text=description,
                 description_hash=make_description_hash(description),
-                dedupe_key=make_dedupe_key("DashCo", "Software Engineer", "Remote"),
+                dedupe_key=make_dedupe_key(company.canonical_name, title, "Remote"),
                 company_apply_url="https://example.com/jobs/1",
                 status="new",
                 scraped_at=datetime.now(UTC),
@@ -137,3 +145,20 @@ def test_job_list_omits_private_resume_metadata(client: TestClient) -> None:
     assert "fact_ids" not in item
     assert "warnings" not in item
     assert "authorization" not in item
+
+
+def test_excluded_job_preview_blocks_generation(client: TestClient) -> None:
+    job_id = _seed(
+        title="Senior Infrastructure Engineer",
+        description=(
+            "Active TS/SCI clearance required. U.S. citizenship required. "
+            "Kubernetes AWS cloud platform engineering. " * 10
+        ),
+    )
+    response = client.get(f"/api/jobs/{job_id}/resume/preview")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["can_generate"] is False
+    assert "eligibility policy" in (data.get("block_reason") or "").lower()
+    assert "ts/sci" not in (data.get("block_reason") or "").lower()
+    assert "citizenship" not in (data.get("block_reason") or "").lower()

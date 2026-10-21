@@ -18,26 +18,38 @@ from apps.resume_generation.services.ats_validation_service import (
     validate_artifacts,
 )
 from apps.resume_generation.services.docx_render_service import render_docx
+from apps.resume_generation.services.generation_preflight import (
+    ELIGIBILITY_BLOCK_MSG,
+    generation_preflight,
+)
 from apps.resume_generation.services.job_requirement_service import (
-    extract_job_requirements,
     job_description_hash,
 )
 from apps.resume_generation.services.pdf_render_service import convert_docx_to_pdf
 from apps.resume_generation.services.provenance_service import build_audit_payload
-from apps.resume_generation.services.resume_composer_service import (
-    compose_resume,
-    trim_for_page_budget,
-)
+from apps.resume_generation.services.resume_composer_service import trim_for_page_budget
 from apps.resume_generation.services.resume_fact_service import usable_facts
 from apps.resume_generation.services.resume_strategy_service import (
     build_resume_strategy,
 )
+from apps.resume_generation.services.structured_document_service import (
+    validate_document_structure,
+)
 from packages.core.domain.models import JobPosting, ResumeGeneration, make_uuid
 
-INSUFFICIENT_MSG = (
-    "Cannot generate a reliable tailored resume because this job does not "
-    "contain enough job-description detail."
-)
+
+def _supersede_prior_successes(session: Session, job_id: str) -> None:
+    prior = (
+        session.query(ResumeGeneration)
+        .filter(
+            ResumeGeneration.job_posting_id == job_id,
+            ResumeGeneration.status == "succeeded",
+            ResumeGeneration.quality_status == "active",
+        )
+        .all()
+    )
+    for row in prior:
+        row.quality_status = "superseded_quality"
 
 
 def preview_generation(
@@ -55,14 +67,34 @@ def preview_generation(
     )
     if job is None:
         return {"error": "Job not found", "status": "error"}
-    req = extract_job_requirements(job)
+
+    block = generation_preflight(session, job)
+    facts = usable_facts(session)
+    if block:
+        return {
+            "status": "blocked",
+            "job_id": job.id,
+            "title": job.title,
+            "company": job.company.canonical_name if job.company else None,
+            "track": None,
+            "reason": None,
+            "evidence_count": len(facts),
+            "provider": "deterministic",
+            "insufficient_description": False,
+            "warnings": [],
+            "gaps": [],
+            "source_files": [],
+            "can_generate": False,
+            "block_reason": block,
+        }
+
     strategy = build_resume_strategy(
         session,
         job,
         track_override=track,
         deterministic_only=deterministic_only,
     )
-    facts = usable_facts(session)
+    can = bool(strategy.document) and not strategy.block_reason
     return {
         "status": "preview",
         "job_id": job.id,
@@ -72,21 +104,12 @@ def preview_generation(
         "reason": strategy.reason,
         "evidence_count": len(facts),
         "provider": strategy.provider,
-        "insufficient_description": req.insufficient_description,
+        "insufficient_description": False,
         "warnings": strategy.warnings,
         "gaps": strategy.gaps,
         "source_files": strategy.source_files,
-        "can_generate": bool(strategy.selected_fact_ids)
-        and not (
-            req.insufficient_description
-            and len((job.description_text or "").strip()) < 40
-        ),
-        "block_reason": (
-            INSUFFICIENT_MSG
-            if req.insufficient_description
-            and len((job.description_text or "").strip()) < 40
-            else None
-        ),
+        "can_generate": can,
+        "block_reason": strategy.block_reason,
     }
 
 
@@ -103,9 +126,39 @@ def generate_resume_for_job(
     if job is None:
         return GenerationResult(status="error", error="Job not found")
 
-    req = extract_job_requirements(job)
-    if req.insufficient_description and len((job.description_text or "").strip()) < 40:
-        return GenerationResult(status="error", error=INSUFFICIENT_MSG)
+    block = generation_preflight(session, job)
+    if block:
+        gen = ResumeGeneration(
+            id=make_uuid(),
+            job_posting_id=job.id,
+            status="blocked",
+            error_message=block,
+            quality_status="failed_quality_validation",
+            job_description_hash=job_description_hash(job),
+            template_version=TEMPLATE_VERSION,
+        )
+        session.add(gen)
+        session.flush()
+        # Mark any prior "succeeded" outputs as superseded so UI does not treat them as good
+        if block == ELIGIBILITY_BLOCK_MSG or "GPA" in block or "eligibility" in block:
+            _supersede_prior_successes(session, job.id)
+            for row in (
+                session.query(ResumeGeneration)
+                .filter(
+                    ResumeGeneration.job_posting_id == job.id,
+                    ResumeGeneration.status == "succeeded",
+                )
+                .all()
+            ):
+                row.quality_status = "failed_quality_validation"
+                if row.status == "succeeded":
+                    row.status = "superseded"
+        return GenerationResult(
+            status="blocked",
+            generation_id=gen.id,
+            error=block,
+            provider="deterministic",
+        )
 
     strategy = build_resume_strategy(
         session,
@@ -113,12 +166,24 @@ def generate_resume_for_job(
         track_override=track,
         deterministic_only=deterministic_only,
     )
-    if not strategy.selected_fact_ids:
+    if strategy.block_reason or not strategy.document:
         return GenerationResult(
             status="error",
-            error="No verified resume facts available. Run: python -m apps.cli.main resumes scan",
+            error=strategy.block_reason
+            or "No verified resume structure available. Run: resumes scan --rebuild",
             warnings=strategy.warnings,
             gaps=strategy.gaps,
+            track=strategy.track,
+            provider=strategy.provider,
+        )
+
+    document = strategy.document
+    structure_errors = validate_document_structure(document)
+    if structure_errors:
+        return GenerationResult(
+            status="error",
+            error=structure_errors[0],
+            warnings=strategy.warnings + structure_errors,
             track=strategy.track,
             provider=strategy.provider,
         )
@@ -133,7 +198,6 @@ def generate_resume_for_job(
             provider=strategy.provider,
         )
 
-    composed = compose_resume(session, strategy, job_title=job.title)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_dir = GENERATED_ROOT / job_id / stamp
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -146,13 +210,14 @@ def generate_resume_for_job(
         status="rendering",
         selected_track=strategy.track,
         source_files_json=strategy.source_files,
-        fact_ids_json=composed.fact_ids,
+        fact_ids_json=document.fact_ids,
         job_description_hash=job_description_hash(job),
         template_version=TEMPLATE_VERSION,
         semantic_provider=strategy.provider,
         semantic_model=strategy.model,
         warnings_json=strategy.warnings,
         gaps_json=strategy.gaps,
+        quality_status="active",
     )
     session.add(gen)
     session.flush()
@@ -161,19 +226,23 @@ def generate_resume_for_job(
         warnings = list(strategy.warnings)
         validation = None
         for attempt in range(3):
-            render_docx(composed, docx_path)
+            render_docx(document, docx_path)
             convert_docx_to_pdf(docx_path, pdf_path)
-            validation = validate_artifacts(docx_path=docx_path, pdf_path=pdf_path)
+            validation = validate_artifacts(
+                docx_path=docx_path,
+                pdf_path=pdf_path,
+                document=document,
+            )
             if validation.ok:
                 break
             if validation.page_count and validation.page_count > 1 and attempt < 2:
-                composed = trim_for_page_budget(composed, pass_number=attempt + 1)
-                warnings.extend(composed.omit_reasons[-3:])
+                document = trim_for_page_budget(document, pass_number=attempt + 1)
+                warnings.extend(document.omit_reasons[-3:])
                 continue
             break
 
         assert validation is not None
-        warnings.extend(composed.omit_reasons)
+        warnings.extend(document.omit_reasons)
         deduped: list[str] = []
         seen_w: set[str] = set()
         for w in warnings:
@@ -182,11 +251,10 @@ def generate_resume_for_job(
                 deduped.append(w)
         warnings = deduped
         gen.warnings_json = warnings
-
-        gen.fact_ids_json = composed.fact_ids
+        gen.fact_ids_json = document.fact_ids
         audit = build_audit_payload(
             strategy=strategy,
-            composed=composed,
+            composed=document,
             validation=validation,
             template_version=TEMPLATE_VERSION,
             job_description_hash=job_description_hash(job),
@@ -202,6 +270,7 @@ def generate_resume_for_job(
                 if path.exists():
                     shutil.copy2(path, fail_dir / path.name)
             gen.status = "validation_failed"
+            gen.quality_status = "failed_quality_validation"
             gen.error_message = "; ".join(validation.messages)
             session.flush()
             return GenerationResult(
@@ -225,7 +294,9 @@ def generate_resume_for_job(
             desktop = str(dest)
             gen.desktop_pdf_path = desktop
 
+        _supersede_prior_successes(session, job.id)
         gen.status = "succeeded"
+        gen.quality_status = "active"
         session.flush()
         return GenerationResult(
             status="succeeded",
@@ -242,6 +313,7 @@ def generate_resume_for_job(
         )
     except Exception as exc:
         gen.status = "error"
+        gen.quality_status = "failed_quality_validation"
         gen.error_message = f"{exc.__class__.__name__}: {exc}"
         session.flush()
         return GenerationResult(
