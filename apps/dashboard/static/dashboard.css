@@ -224,6 +224,128 @@ select {
   margin: 1rem 0 2rem;
 }
 
+.breadcrumb {
+  margin: 0 0 0.35rem;
+  font-size: 0.9rem;
+}
+
+.breadcrumb a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.header-actions {
+  display: flex;
+  align-items: flex-start;
+}
+
+.actions-menu {
+  position: relative;
+}
+
+.actions-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.25rem);
+  min-width: 14rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  z-index: 20;
+  padding: 0.25rem;
+}
+
+.actions-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 0.55rem 0.7rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font: inherit;
+  color: var(--text);
+}
+
+.actions-item:hover {
+  background: var(--accent-soft);
+}
+
+.detail-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.5rem 1rem;
+  margin: 1rem 0 1.25rem;
+  padding: 0.85rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.detail-meta p {
+  margin: 0;
+}
+
+.confirm-panel,
+.result-panel,
+.description-block {
+  margin: 1rem 0 1.5rem;
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.confirm-panel h2,
+.result-panel h2,
+.description-block h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.05rem;
+}
+
+.confirm-list,
+.result-list {
+  margin: 0 0 1rem;
+  padding-left: 1.2rem;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.job-description {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: inherit;
+  margin: 0;
+  color: var(--text);
+  max-height: 28rem;
+  overflow: auto;
+}
+
+.inline-warning,
+.warn-text {
+  color: var(--danger);
+}
+
+.gaps-details {
+  margin-top: 0.75rem;
+}
+
+.gaps-details ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1.2rem;
+}
+
+code {
+  font-size: 0.85em;
+  word-break: break-all;
+}
+
 @media (max-width: 700px) {
   .site-header {
     flex-direction: column;

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Job detail · Ganesha</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-text">
+      <p class="breadcrumb"><a href="/">← Job feed</a></p>
+      <h1 id="job-title">Loading…</h1>
+      <p class="subtitle" id="job-company"></p>
+    </div>
+    <div class="header-actions">
+      <div class="actions-menu" id="actions-menu">
+        <button type="button" class="btn" id="actions-toggle" aria-expanded="false" aria-haspopup="true" aria-controls="actions-panel">
+          Actions
+        </button>
+        <div class="actions-panel" id="actions-panel" hidden role="menu">
+          <button type="button" class="actions-item" id="action-generate-resume" role="menuitem">
+            Generate tailored resume
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <p id="status-message" class="status-message" hidden role="status"></p>
+
+    <section class="detail-meta" id="detail-meta" hidden>
+      <p><span class="muted">Location</span> <span id="job-location"></span></p>
+      <p><span class="muted">Source</span> <span id="job-source"></span></p>
+      <p><span class="muted">Posting</span> <span id="job-posting"></span></p>
+      <p><span class="muted">Recommended track</span> <span id="job-track"></span></p>
+    </section>
+
+    <section class="confirm-panel" id="confirm-panel" hidden>
+      <h2>Confirm resume generation</h2>
+      <ul class="confirm-list" id="confirm-list"></ul>
+      <div class="confirm-actions">
+        <button type="button" class="btn primary" id="confirm-generate">Generate</button>
+        <button type="button" class="btn" id="cancel-generate">Cancel</button>
+      </div>
+    </section>
+
+    <section class="result-panel" id="result-panel" hidden>
+      <h2>Generation result</h2>
+      <div id="result-body"></div>
+    </section>
+
+    <section class="description-block">
+      <h2>Job description</h2>
+      <p id="desc-warning" class="inline-warning" hidden></p>
+      <pre id="job-description" class="job-description">Loading…</pre>
+    </section>
+  </main>
+
+  <script>
+    window.GANESHA_DASHBOARD = {
+      dbUnavailableMessage: {{ db_unavailable_message | tojson }},
+      jobId: {{ job_id | tojson }},
+      page: "job_detail"
+    };
+  </script>
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>
