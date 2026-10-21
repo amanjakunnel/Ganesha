@@ -31,6 +31,17 @@ Common tasks
 - Sheets initialization (creates tabs if missing):
   make sheets-init
 
+Resume generation
+-----------------
+See `docs/resume-generation.md` for corpus scan, doctor, generate, Desktop PDF
+output, and optional Anthropic semantic provider setup.
+
+```bash
+python -m apps.cli.main resumes doctor
+python -m apps.cli.main resumes scan --dry-run
+python -m apps.cli.main resumes generate <job-id> --deterministic-only
+```
+
 Notes
 -----
 - Keep `.env` and credential files local and out of git.
