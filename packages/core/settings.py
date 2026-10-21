@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     telegram_allowed_chat_id: Optional[int] = None
     telegram_chat_id: Optional[int] = None  # legacy alias for TELEGRAM_CHAT_ID
     telegram_debug: bool = False
+    resume_source_path: str = "/Users/amanjakunnel/Documents/Resumés"
+    resume_desktop_pdf_path: str = (
+        "/Users/amanjakunnel/Desktop/Alex_Michael_Manjakunnel_Resume.pdf"
+    )
+    semantic_fit_provider: str = "none"
+    anthropic_api_key: Optional[str] = None
+    anthropic_model: str = "claude-haiku-5-5"
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"

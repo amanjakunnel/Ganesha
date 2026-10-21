@@ -2,6 +2,7 @@
 
 Uses SQLAlchemy 2.x typed declarative style with Mapped types for full type safety.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -123,7 +124,9 @@ class ReferralContact(Base):
     team: Mapped[str | None] = mapped_column(String(255), nullable=True)
     locations: Mapped[str | None] = mapped_column(String(512), nullable=True)
     alternate_location: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    source_import_key: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
+    source_import_key: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, unique=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -142,7 +145,9 @@ class JobAssessment(Base):
     )
     recommended_track: Mapped[str] = mapped_column(String(32))
     score: Mapped[int] = mapped_column(Integer)
-    score_explanation: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    score_explanation: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True
+    )
     key_skills: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     missing_or_uncertain_skills: Mapped[list[str] | None] = mapped_column(
         JSON, nullable=True
@@ -235,7 +240,9 @@ class ReferralTask(Base):
     __tablename__ = "referral_tasks"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=make_uuid)
-    job_posting_id: Mapped[str] = mapped_column(String(36), ForeignKey("job_postings.id"))
+    job_posting_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("job_postings.id")
+    )
     status: Mapped[str] = mapped_column(
         String(32), default="not_needed"
     )  # not_needed, research_needed, draft_ready, sent_manually, waiting, cutoff_reached, closed
@@ -285,7 +292,9 @@ def make_dedupe_key(
     company_name: str | None, title: str | None, location: str | None
 ) -> str:
     """Generate deduplication key from company, title, and location."""
-    key = "|".join([company_name or "", (title or "").lower().strip(), (location or "")])
+    key = "|".join(
+        [company_name or "", (title or "").lower().strip(), (location or "")]
+    )
     return hash_text(key)
 
 
@@ -306,18 +315,112 @@ class DecisionRequest(Base):
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     options_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     default_action: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     resolved_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     selected_action: Mapped[str | None] = mapped_column(String(128), nullable=True)
     resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, unique=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
     __table_args__ = (
         Index("ix_decision_status", "status"),
         Index("ix_decision_entity", "entity_type", "entity_id"),
         Index("ix_decision_type", "decision_type"),
         Index("ix_decision_expires", "expires_at"),
+    )
+
+
+class ResumeSourceDocument(Base):
+    """Indexed DOCX resume source file from the local corpus."""
+
+    __tablename__ = "resume_source_documents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=make_uuid)
+    absolute_path: Mapped[str] = mapped_column(String(2048), unique=True)
+    filename: Mapped[str] = mapped_column(String(512))
+    track: Mapped[str] = mapped_column(String(64))
+    content_hash: Mapped[str] = mapped_column(String(128))
+    parse_status: Mapped[str] = mapped_column(String(32), default="ok")
+    fact_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_scanned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ResumeFact(Base):
+    """Extracted resume bullet/fact with provenance."""
+
+    __tablename__ = "resume_facts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=make_uuid)
+    source_document_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("resume_source_documents.id")
+    )
+    section: Mapped[str] = mapped_column(String(64))
+    source_text: Mapped[str] = mapped_column(Text)
+    normalized_text: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(128))
+    employer_or_project: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    skills_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    dates_text: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    metrics_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    verification_state: Mapped[str] = mapped_column(
+        String(32), default="source_extracted"
+    )
+    conflict_group: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    usable: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_resume_facts_hash", "content_hash"),
+        Index("ix_resume_facts_source", "source_document_id"),
+    )
+
+
+class ResumeGeneration(Base):
+    """Audit record for an on-demand tailored resume generation."""
+
+    __tablename__ = "resume_generations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=make_uuid)
+    job_posting_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("job_postings.id")
+    )
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    selected_track: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    docx_path: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    pdf_path: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    desktop_pdf_path: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    source_files_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    fact_ids_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    job_description_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    template_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    semantic_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    semantic_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    validation_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    warnings_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    gaps_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )

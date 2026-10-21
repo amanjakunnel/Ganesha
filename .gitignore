@@ -35,6 +35,8 @@ sheets/.DS_Store
 
 # Do not commit any personal resume or candidate private docs
 data/candidate_resume*/
+data/generated_resumes/
+data/resume_corpus/
 
 # Python packaging metadata
 *.egg-info/
