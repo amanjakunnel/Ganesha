@@ -55,7 +55,7 @@ def _is_near_duplicate(
     return False
 
 
-def _role_sort_key(entry: ExperienceEntry) -> tuple:
+def _role_sort_key(entry: ExperienceEntry) -> tuple[int, int]:
     """Reverse-chronological: prefer Present / later end years."""
     dates = (entry.dates or "").lower()
     present = 1 if "present" in dates else 0
