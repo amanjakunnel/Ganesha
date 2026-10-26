@@ -273,6 +273,21 @@ select {
   background: var(--accent-soft);
 }
 
+.actions-voice {
+  display: block;
+  padding: 0.45rem 0.7rem 0.2rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.actions-voice select {
+  display: block;
+  width: 100%;
+  margin-top: 0.25rem;
+  font: inherit;
+  color: var(--text);
+}
+
 .detail-meta {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

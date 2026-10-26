@@ -52,6 +52,10 @@ from apps.cli.resume_commands import resumes_app  # noqa: E402
 
 app.add_typer(resumes_app, name="resumes")
 
+from apps.cli.cover_letter_commands import cover_letters_app  # noqa: E402
+
+app.add_typer(cover_letters_app, name="cover-letters")
+
 
 @app.command("db-doctor", hidden=True)
 def db_doctor_legacy() -> None:

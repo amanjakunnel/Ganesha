@@ -114,6 +114,9 @@ def discover_docx_files(root: Path) -> tuple[list[Path], ScanSummary]:
         if path.suffix.lower() != ".docx":
             summary.skipped += 1
             continue
+        if any(part.lower() in {"cover letters", "cover_letters"} for part in path.parts):
+            summary.skipped += 1
+            continue
         found.append(path)
         summary.discovered += 1
     return found, summary

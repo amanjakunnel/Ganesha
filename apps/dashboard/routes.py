@@ -16,6 +16,15 @@ from apps.dashboard.services.jobs_dashboard_service import (
     list_dashboard_jobs,
     to_dashboard_item,
 )
+from apps.cover_letter_generation.services.cover_letter_generation_service import (
+    generate_cover_letter_for_job,
+)
+from apps.cover_letter_generation.services.cover_letter_plan_service import (
+    build_cover_letter_plan,
+)
+from apps.cover_letter_generation.services.cover_letter_provenance_service import (
+    plan_to_public_dict,
+)
 from apps.resume_generation.services.generation_service import (
     generate_resume_for_job,
     preview_generation,
@@ -217,6 +226,89 @@ def api_resume_generate(
                 {"error": DB_UNAVAILABLE_MESSAGE},
                 status_code=503,
             )
+        raise
+
+
+class CoverLetterBody(BaseModel):
+    voice: str = "technical_direct"
+    deterministic_only: bool = False
+    confirm: bool = False
+    skip_company_research: bool = False
+
+
+@router.get("/api/jobs/{job_id}/cover-letter/plan")
+def api_cover_letter_plan(
+    job_id: str,
+    voice: str = "technical_direct",
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    try:
+        job = session.query(JobPosting).filter(JobPosting.id == job_id).one_or_none()
+        if job is None:
+            return JSONResponse({"error": "Job not found"}, status_code=404)
+        plan = build_cover_letter_plan(
+            session,
+            job,
+            voice=voice,
+            skip_company_research=False,
+        )
+        return JSONResponse(plan_to_public_dict(plan))
+    except Exception as exc:
+        if is_database_unavailable(exc):
+            return JSONResponse({"error": DB_UNAVAILABLE_MESSAGE}, status_code=503)
+        raise
+
+
+@router.post("/api/jobs/{job_id}/cover-letter/generate")
+def api_cover_letter_generate(
+    job_id: str,
+    body: CoverLetterBody,
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    if not body.confirm:
+        return JSONResponse(
+            {"error": "Confirmation required", "status": "error"},
+            status_code=400,
+        )
+    try:
+        result = generate_cover_letter_for_job(
+            session,
+            job_id,
+            voice=body.voice,
+            deterministic_only=body.deterministic_only,
+            copy_to_desktop=True,
+            skip_company_research=body.skip_company_research,
+        )
+        session.commit()
+        payload = {
+            "status": result.status,
+            "voice": result.voice,
+            "provider": result.provider,
+            "evidence_count": result.evidence_count,
+            "company_evidence_used": result.company_evidence_used,
+            "docx_path": result.docx_path,
+            "pdf_path": result.pdf_path,
+            "desktop_pdf_path": result.desktop_pdf_path,
+            "warnings": result.warnings,
+            "error": result.error,
+            "plan": result.plan,
+            "validation": (
+                {
+                    "ok": result.validation.ok,
+                    "page_count": result.validation.page_count,
+                    "word_count": result.validation.word_count,
+                    "messages": result.validation.messages,
+                }
+                if result.validation
+                else None
+            ),
+        }
+        code = 200 if result.status == "succeeded" else 400
+        return JSONResponse(payload, status_code=code)
+    except Exception as exc:
+        session.rollback()
+        if is_database_unavailable(exc):
+            return JSONResponse({"error": DB_UNAVAILABLE_MESSAGE}, status_code=503)
         raise
 
 

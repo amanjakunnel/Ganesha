@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     resume_desktop_pdf_path: str = (
         "/Users/amanjakunnel/Desktop/Alex_Michael_Manjakunnel_Resume.pdf"
     )
+    ganesha_cover_letters_dir: Optional[str] = None
+    cover_desktop_pdf_path: str = (
+        "/Users/amanjakunnel/Desktop/Alex_Michael_Manjakunnel_Cover.pdf"
+    )
     semantic_fit_provider: str = "none"
     anthropic_api_key: Optional[str] = None
     anthropic_model: str = "claude-haiku-5-5"

@@ -250,6 +250,11 @@
     const actionsToggle = document.getElementById("actions-toggle");
     const actionsPanel = document.getElementById("actions-panel");
     const generateBtn = document.getElementById("action-generate-resume");
+    const coverBtn = document.getElementById("action-generate-cover");
+    const coverPlanBtn = document.getElementById("action-view-cover-plan");
+    const coverVoice = document.getElementById("cover-voice");
+    const coverPlanPanel = document.getElementById("cover-plan-panel");
+    const coverPlanBody = document.getElementById("cover-plan-body");
     const confirmPanel = document.getElementById("confirm-panel");
     const confirmList = document.getElementById("confirm-list");
     const confirmGenerate = document.getElementById("confirm-generate");
@@ -447,6 +452,92 @@
         confirmGenerate.disabled = false;
       }
     });
+
+    function selectedVoice() {
+      return (coverVoice && coverVoice.value) || "technical_direct";
+    }
+
+    if (coverBtn) {
+      coverBtn.addEventListener("click", async () => {
+        closeActions();
+        setStatus("empty", "Generating tailored cover letter…");
+        resultPanel.hidden = true;
+        try {
+          const response = await fetch(
+            `/api/jobs/${encodeURIComponent(jobId)}/cover-letter/generate`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                confirm: true,
+                voice: selectedVoice(),
+                deterministic_only: false,
+              }),
+            }
+          );
+          const data = await response.json();
+          resultPanel.hidden = false;
+          if (data.status === "succeeded") {
+            setStatus("empty", "Cover letter generated");
+            resultBody.innerHTML = `
+              <ul class="result-list">
+                <li>Cover letter generated</li>
+                <li>Voice: ${escapeHtml(data.voice || "")}</li>
+                <li>Selected evidence: ${escapeHtml(String(data.evidence_count || 0))}</li>
+                <li>Company evidence used: ${data.company_evidence_used ? "yes" : "no"}</li>
+                <li>Internal DOCX: <code>${escapeHtml(data.docx_path || "")}</code></li>
+                <li>Internal PDF: <code>${escapeHtml(data.pdf_path || "")}</code></li>
+                <li>Desktop PDF: <code>${escapeHtml(data.desktop_pdf_path || "")}</code></li>
+                <li>Validation: ${data.validation && data.validation.ok ? "passed" : "failed"}</li>
+              </ul>
+            `;
+          } else {
+            setStatus("error", escapeHtml(data.error || "Cover-letter generation failed."));
+            resultBody.innerHTML = `<p>${escapeHtml(data.error || "Cover-letter generation failed.")}</p>`;
+          }
+        } catch (_err) {
+          setStatus("error", "Cover-letter generation request failed.");
+        }
+      });
+    }
+
+    if (coverPlanBtn) {
+      coverPlanBtn.addEventListener("click", async () => {
+        closeActions();
+        coverPlanPanel.hidden = false;
+        coverPlanBody.innerHTML = "<p>Loading cover-letter plan…</p>";
+        try {
+          const response = await fetch(
+            `/api/jobs/${encodeURIComponent(jobId)}/cover-letter/plan?voice=${encodeURIComponent(selectedVoice())}`
+          );
+          const data = await response.json();
+          if (!response.ok) {
+            coverPlanBody.innerHTML = `<p>${escapeHtml(data.error || "Plan unavailable.")}</p>`;
+            return;
+          }
+          const primary = data.primary ? data.primary.label : "none";
+          const secondary = data.secondary ? data.secondary.label : "none";
+          const companyCount = (data.company_evidence || []).length;
+          const warnings = (data.warnings || [])
+            .map((warning) => `<li>${escapeHtml(warning)}</li>`)
+            .join("");
+          coverPlanBody.innerHTML = `
+            <ul class="result-list">
+              <li>Role: ${escapeHtml(data.role || "")}</li>
+              <li>Company: ${escapeHtml(data.company || "")}</li>
+              <li>Voice: ${escapeHtml(data.voice || "")}</li>
+              <li>Resume track: ${escapeHtml(data.resume_track || "")}</li>
+              <li>Primary evidence: ${escapeHtml(primary)}</li>
+              <li>Secondary evidence: ${escapeHtml(secondary)}</li>
+              <li>Official company evidence: ${companyCount}</li>
+            </ul>
+            ${warnings ? `<ul>${warnings}</ul>` : ""}
+          `;
+        } catch (_err) {
+          coverPlanBody.innerHTML = "<p>Could not load the cover-letter plan.</p>";
+        }
+      });
+    }
 
     loadDetail();
   }

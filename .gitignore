@@ -37,6 +37,7 @@ sheets/.DS_Store
 data/candidate_resume*/
 data/generated_resumes/
 data/resume_corpus/
+data/cover_letter_cache/
 
 # Python packaging metadata
 *.egg-info/

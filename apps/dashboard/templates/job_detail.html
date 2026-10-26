@@ -22,6 +22,22 @@
           <button type="button" class="actions-item" id="action-generate-resume" role="menuitem">
             Generate tailored resume
           </button>
+          <label class="actions-voice">
+            Cover letter voice
+            <select id="cover-voice">
+              <option value="technical_direct" selected>Technical, direct</option>
+              <option value="product_oriented">Product oriented</option>
+              <option value="mission_oriented">Mission oriented</option>
+              <option value="startup_fast_paced">Startup, fast paced</option>
+              <option value="large_company_professional">Large company, professional</option>
+            </select>
+          </label>
+          <button type="button" class="actions-item" id="action-generate-cover" role="menuitem">
+            Generate tailored cover letter
+          </button>
+          <button type="button" class="actions-item" id="action-view-cover-plan" role="menuitem">
+            View cover-letter plan
+          </button>
         </div>
       </div>
     </div>
@@ -49,6 +65,11 @@
     <section class="result-panel" id="result-panel" hidden>
       <h2>Generation result</h2>
       <div id="result-body"></div>
+    </section>
+
+    <section class="result-panel" id="cover-plan-panel" hidden>
+      <h2>Cover-letter plan</h2>
+      <div id="cover-plan-body"></div>
     </section>
 
     <section class="description-block">
