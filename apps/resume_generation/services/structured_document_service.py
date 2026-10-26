@@ -410,8 +410,17 @@ def _build_education_entries(facts: list[ResumeFact]) -> list[EducationEntry]:
             if fact.dates_text and not institutions[key].graduation_date:
                 institutions[key].graduation_date = fact.dates_text
 
+    from packages.core.settings import settings
+
+    resolved_penn = (settings.authoritative_penn_state_gpa or "").strip() or None
+    resolved_pes = (settings.authoritative_pes_gpa or "").strip() or None
     for entry in institutions.values():
-        if conflicted_gpa:
+        inst = entry.institution.lower()
+        if resolved_penn and "pennsylvania state" in inst:
+            entry.gpa = resolved_penn
+        elif resolved_pes and inst.startswith("pes "):
+            entry.gpa = resolved_pes
+        elif conflicted_gpa:
             entry.gpa = None
 
     ordered = sorted(

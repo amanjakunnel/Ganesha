@@ -78,11 +78,16 @@ def _structural_checks(docx_text: str, document: ResumeDocument | None) -> list[
     if dupes:
         messages.append(f"Duplicate normalized lines detected ({len(dupes)})")
 
-    # GPA conflict visible in output
-    gpas = set(re.findall(r"GPA[:\s]*([0-9]\.[0-9])", docx_text, flags=re.I))
-    gpas |= set(re.findall(r"\b(3\.[567])\s*/\s*4", docx_text))
-    if len(gpas) > 1:
-        messages.append(f"Multiple GPA values rendered: {', '.join(sorted(gpas))}")
+    # One GPA line per school. Extra or mismatched values are still a conflict.
+    rendered = re.findall(r"GPA[:\s]*([0-9]\.[0-9])", docx_text, flags=re.I)
+    if document is not None:
+        expected = [ed.gpa for ed in document.education if ed.gpa]
+        if sorted(rendered) != sorted(expected):
+            shown = ", ".join(sorted(set(rendered))) or "none"
+            wanted = ", ".join(sorted(set(expected))) or "none"
+            messages.append(f"GPA lines do not match education entries: {shown} vs {wanted}")
+    elif len(set(rendered)) > 1:
+        messages.append(f"Multiple GPA values rendered: {', '.join(sorted(set(rendered)))}")
 
     if document:
         for exp in document.experience:

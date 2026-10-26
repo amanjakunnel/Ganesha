@@ -155,7 +155,9 @@ def has_unresolved_identity_conflicts(session: Session) -> list[str]:
 
 
 def gpa_conflict_warning(session: Session) -> str | None:
-    """Warn when GPAs conflict; callers must omit GPA from generated output."""
+    """Warn when source GPAs conflict. A configured Penn State GPA is not a source merge."""
+    from packages.core.settings import settings
+
     gpa_conflicts = (
         session.query(ResumeFact)
         .filter(
@@ -164,12 +166,29 @@ def gpa_conflict_warning(session: Session) -> str | None:
         )
         .count()
     )
-    if gpa_conflicts:
+    if not gpa_conflicts:
+        return None
+    penn = (settings.authoritative_penn_state_gpa or "").strip()
+    pes = (settings.authoritative_pes_gpa or "").strip()
+    if penn and pes:
         return (
-            "Unresolved GPA conflicts in corpus; GPA omitted from generated resume "
-            "until an authoritative value is configured."
+            "Source resumes still disagree on GPA. Penn State and PES use the "
+            "configured GPAs; every other GPA is omitted."
         )
-    return None
+    if penn:
+        return (
+            "Source resumes still disagree on GPA. Penn State uses the configured "
+            "GPA; every other GPA is omitted."
+        )
+    if pes:
+        return (
+            "Source resumes still disagree on GPA. PES uses the configured GPA; "
+            "every other GPA is omitted."
+        )
+    return (
+        "Unresolved GPA conflicts in corpus; GPA omitted from generated resume "
+        "until an authoritative value is configured."
+    )
 
 
 def scan_resume_corpus(

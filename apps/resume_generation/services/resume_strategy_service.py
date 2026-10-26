@@ -61,8 +61,6 @@ def build_resume_strategy(
     gpa_warn = gpa_conflict_warning(session)
     if gpa_warn:
         warnings.append(gpa_warn)
-        for ed in document.education:
-            ed.gpa = None
     structure_errors = validate_document_structure(document)
     if structure_errors:
         return ResumeStrategy(

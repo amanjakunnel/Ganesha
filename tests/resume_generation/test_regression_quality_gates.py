@@ -100,7 +100,13 @@ def _job(
     return job
 
 
-def test_gpa_conflict_detected_and_omitted(session: Session, tmp_path: Path) -> None:
+def test_gpa_conflict_detected_and_omitted(
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from packages.core import settings as settings_mod
+
+    monkeypatch.setattr(settings_mod.settings, "authoritative_penn_state_gpa", None)
+    monkeypatch.setattr(settings_mod.settings, "authoritative_pes_gpa", None)
     root = build_conflicting_gpa_corpus(tmp_path / "resumes")
     summary = scan_resume_corpus(session, path=root, rebuild=True)
     session.commit()
@@ -128,6 +134,68 @@ def test_gpa_conflict_detected_and_omitted(session: Session, tmp_path: Path) -> 
     text = extract_docx_text(docx)
     assert "GPA" not in text
     assert "3.5" not in text and "3.6" not in text and "3.7" not in text
+
+
+def test_penn_state_gpa_uses_configured_value_only(
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from packages.core import settings as settings_mod
+
+    monkeypatch.setattr(settings_mod.settings, "authoritative_penn_state_gpa", "3.5")
+    monkeypatch.setattr(settings_mod.settings, "authoritative_pes_gpa", None)
+    root = build_conflicting_gpa_corpus(tmp_path / "resumes")
+    scan_resume_corpus(session, path=root, rebuild=True)
+    session.commit()
+    job = _job(
+        session,
+        title="Software Engineer",
+        description="Backend Python API Docker Kubernetes software engineer " * 20,
+    )
+    strategy = build_resume_strategy(session, job, deterministic_only=True)
+    assert strategy.document is not None
+    penn = [
+        ed
+        for ed in strategy.document.education
+        if "pennsylvania state" in ed.institution.lower()
+    ]
+    other = [
+        ed
+        for ed in strategy.document.education
+        if "pennsylvania state" not in ed.institution.lower()
+    ]
+    assert penn and penn[0].gpa == "3.5"
+    assert all(ed.gpa is None for ed in other)
+    text = extract_docx_text(render_docx(strategy.document, tmp_path / "psu.docx"))
+    assert "GPA: 3.5/4.0" in text
+    assert "3.6" not in text and "3.7" not in text
+
+
+def test_configured_school_gpas_do_not_cross_institutions(
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from packages.core import settings as settings_mod
+
+    monkeypatch.setattr(settings_mod.settings, "authoritative_penn_state_gpa", "3.5")
+    monkeypatch.setattr(settings_mod.settings, "authoritative_pes_gpa", "3.6")
+    root = build_conflicting_gpa_corpus(tmp_path / "resumes")
+    scan_resume_corpus(session, path=root, rebuild=True)
+    session.commit()
+    job = _job(
+        session,
+        title="Software Engineer",
+        description="Backend Python API Docker Kubernetes software engineer " * 20,
+    )
+    strategy = build_resume_strategy(session, job, deterministic_only=True)
+    assert strategy.document is not None
+    by_school = {ed.institution.lower(): ed.gpa for ed in strategy.document.education}
+    penn = next(gpa for name, gpa in by_school.items() if "pennsylvania state" in name)
+    pes = next(gpa for name, gpa in by_school.items() if name.startswith("pes "))
+    assert penn == "3.5"
+    assert pes == "3.6"
+    text = extract_docx_text(render_docx(strategy.document, tmp_path / "both.docx"))
+    assert "GPA: 3.5/4.0" in text
+    assert "GPA: 3.6/4.0" in text
+    assert "3.7" not in text
 
 
 def test_skills_deduped_once(session: Session, tmp_path: Path) -> None:

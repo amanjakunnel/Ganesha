@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     semantic_fit_provider: str = "none"
     anthropic_api_key: Optional[str] = None
     anthropic_model: str = "claude-haiku-5-5"
+    # User-confirmed school GPAs. Other conflicting GPAs stay omitted.
+    authoritative_penn_state_gpa: Optional[str] = None
+    authoritative_pes_gpa: Optional[str] = None
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
