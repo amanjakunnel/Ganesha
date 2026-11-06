@@ -288,6 +288,82 @@ select {
   color: var(--text);
 }
 
+.generation-controls {
+  margin: 1rem 0 1.25rem;
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.generation-controls h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.generation-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+}
+
+.generation-button-row .btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.cover-options {
+  margin-top: 0.5rem;
+}
+
+.cover-options summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.fit-counts {
+  margin: 0 0 0.75rem;
+  font-size: 0.9rem;
+}
+
+.fit-badge {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: var(--accent-soft);
+  color: var(--accent);
+  text-transform: capitalize;
+}
+
+.fit-badge.fit-recommended {
+  background: #e5f3ea;
+  color: #1b5e20;
+}
+
+.fit-badge.fit-stretch {
+  background: #fff4df;
+  color: #8a5a00;
+}
+
+.fit-badge.fit-low_fit {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.fit-badge.fit-needs_review,
+.fit-badge.fit-unscored {
+  background: #ececec;
+  color: #444;
+}
+
+.fit-reason {
+  margin-top: 0.25rem;
+  font-size: 0.82rem;
+}
+
 .detail-meta {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

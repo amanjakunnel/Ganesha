@@ -81,14 +81,15 @@ def test_feed_does_not_show_generate_action(client: TestClient) -> None:
     assert 'id="actions-toggle"' not in page.text
 
 
-def test_job_detail_has_actions_dropdown(client: TestClient) -> None:
+def test_job_detail_has_visible_generation_buttons(client: TestClient) -> None:
     job_id = _seed()
     page = client.get(f"/jobs/{job_id}")
     assert page.status_code == 200
-    assert "Actions" in page.text
     assert "Generate tailored resume" in page.text
-    assert 'id="actions-toggle"' in page.text
-    assert 'id="action-generate-resume"' in page.text
+    assert "Generate tailored cover letter" in page.text
+    assert 'id="btn-generate-resume"' in page.text
+    assert 'id="btn-generate-cover"' in page.text
+    assert 'id="actions-toggle"' not in page.text
 
 
 def test_incomplete_description_warning(client: TestClient) -> None:
@@ -138,9 +139,11 @@ def test_successful_generation_payload(client: TestClient) -> None:
 
 def test_job_list_omits_private_resume_metadata(client: TestClient) -> None:
     _seed()
-    response = client.get("/api/jobs")
+    response = client.get("/api/jobs?fit=all")
     assert response.status_code == 200
-    item = response.json()["items"][0]
+    items = response.json()["items"]
+    assert items
+    item = items[0]
     assert "gaps" not in item
     assert "fact_ids" not in item
     assert "warnings" not in item

@@ -10,12 +10,19 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 
-from apps.dashboard.schemas import JobQueryParams, JobSort, JobsListResponse
+from apps.dashboard.schemas import FitFeedFilter, JobQueryParams, JobSort, JobsListResponse
 from apps.dashboard.services.jobs_dashboard_service import (
     check_database,
     list_dashboard_jobs,
     to_dashboard_item,
 )
+from apps.cover_letter_generation.services.cover_letter_preflight_service import (
+    cover_letter_preflight,
+)
+from apps.resume_generation.services.generation_preflight import generation_preflight
+from packages.core.services.evidence_fit_service import get_stored_fit
+from packages.core.services.job_eligibility import resolve_job_eligibility
+from packages.core.settings import settings
 from apps.cover_letter_generation.services.cover_letter_generation_service import (
     generate_cover_letter_for_job,
 )
@@ -62,16 +69,23 @@ def _parse_query(
     location: str | None = Query(default=None),
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
+    fit: FitFeedFilter | None = Query(default=None),
     sort: JobSort = Query(default=JobSort.date_desc),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=100),
 ) -> JobQueryParams:
+    default_fit = FitFeedFilter.recommended
+    try:
+        default_fit = FitFeedFilter(settings.fit_default_feed)
+    except ValueError:
+        default_fit = FitFeedFilter.recommended
     return JobQueryParams(
         q=q,
         source=source,
         location=location,
         date_from=date_from,
         date_to=date_to,
+        fit=fit or default_fit,
         sort=sort,
         page=page,
         page_size=page_size,
@@ -128,6 +142,10 @@ def api_job_detail(
         item = to_dashboard_item(job)
         req = extract_job_requirements(job)
         sem = semantic_status()
+        resume_block = generation_preflight(session, job)
+        cover_block = cover_letter_preflight(session, job)
+        fit = get_stored_fit(job) or {}
+        eligibility = resolve_job_eligibility(job)
         return JSONResponse(
             {
                 "job": item.model_dump(mode="json"),
@@ -140,6 +158,16 @@ def api_job_detail(
                 "semantic_provider": sem["provider"],
                 "semantic_configured": sem["api_key"] == "configured"
                 or sem["provider"] == "none",
+                "eligibility": eligibility.result,
+                "fit": fit,
+                "resume_generation": {
+                    "available": resume_block is None,
+                    "block_reason": resume_block,
+                },
+                "cover_letter_generation": {
+                    "available": cover_block is None,
+                    "block_reason": cover_block,
+                },
             }
         )
     except Exception as exc:

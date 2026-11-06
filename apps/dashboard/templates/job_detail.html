@@ -13,34 +13,6 @@
       <h1 id="job-title">Loading…</h1>
       <p class="subtitle" id="job-company"></p>
     </div>
-    <div class="header-actions">
-      <div class="actions-menu" id="actions-menu">
-        <button type="button" class="btn" id="actions-toggle" aria-expanded="false" aria-haspopup="true" aria-controls="actions-panel">
-          Actions
-        </button>
-        <div class="actions-panel" id="actions-panel" hidden role="menu">
-          <button type="button" class="actions-item" id="action-generate-resume" role="menuitem">
-            Generate tailored resume
-          </button>
-          <label class="actions-voice">
-            Cover letter voice
-            <select id="cover-voice">
-              <option value="technical_direct" selected>Technical, direct</option>
-              <option value="product_oriented">Product oriented</option>
-              <option value="mission_oriented">Mission oriented</option>
-              <option value="startup_fast_paced">Startup, fast paced</option>
-              <option value="large_company_professional">Large company, professional</option>
-            </select>
-          </label>
-          <button type="button" class="actions-item" id="action-generate-cover" role="menuitem">
-            Generate tailored cover letter
-          </button>
-          <button type="button" class="actions-item" id="action-view-cover-plan" role="menuitem">
-            View cover-letter plan
-          </button>
-        </div>
-      </div>
-    </div>
   </header>
 
   <main>
@@ -51,10 +23,41 @@
       <p><span class="muted">Source</span> <span id="job-source"></span></p>
       <p><span class="muted">Posting</span> <span id="job-posting"></span></p>
       <p><span class="muted">Recommended track</span> <span id="job-track"></span></p>
+      <p><span class="muted">Fit</span> <span id="job-fit"></span></p>
+    </section>
+
+    <section class="generation-controls" id="generation-controls">
+      <h2>Generate documents</h2>
+      <p class="muted" id="generation-eligibility-note"></p>
+      <div class="generation-button-row">
+        <button type="button" class="btn primary" id="btn-generate-resume">
+          Generate tailored resume
+        </button>
+        <button type="button" class="btn primary" id="btn-generate-cover">
+          Generate tailored cover letter
+        </button>
+      </div>
+      <details class="cover-options" id="cover-options">
+        <summary>Cover letter options</summary>
+        <label class="actions-voice">
+          Voice
+          <select id="cover-voice">
+            <option value="technical_direct" selected>Technical, direct</option>
+            <option value="product_oriented">Product oriented</option>
+            <option value="mission_oriented">Mission oriented</option>
+            <option value="startup_fast_paced">Startup, fast paced</option>
+            <option value="large_company_professional">Large company, professional</option>
+          </select>
+        </label>
+        <button type="button" class="btn" id="btn-view-cover-plan">
+          View cover-letter plan
+        </button>
+      </details>
+      <p class="inline-warning" id="fit-generation-warning" hidden></p>
     </section>
 
     <section class="confirm-panel" id="confirm-panel" hidden>
-      <h2>Confirm resume generation</h2>
+      <h2 id="confirm-title">Confirm generation</h2>
       <ul class="confirm-list" id="confirm-list"></ul>
       <div class="confirm-actions">
         <button type="button" class="btn primary" id="confirm-generate">Generate</button>
@@ -72,6 +75,11 @@
       <div id="cover-plan-body"></div>
     </section>
 
+    <section class="result-panel" id="fit-breakdown-panel" hidden>
+      <h2>Fit evidence</h2>
+      <div id="fit-breakdown-body"></div>
+    </section>
+
     <section class="description-block">
       <h2>Job description</h2>
       <p id="desc-warning" class="inline-warning" hidden></p>
@@ -86,6 +94,6 @@
       page: "job_detail"
     };
   </script>
-  <script src="/static/dashboard.js"></script>
+  <script src="/static/dashboard.js?v=fit1"></script>
 </body>
 </html>

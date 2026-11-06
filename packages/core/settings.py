@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     # User-confirmed school GPAs. Other conflicting GPAs stay omitted.
     authoritative_penn_state_gpa: Optional[str] = None
     authoritative_pes_gpa: Optional[str] = None
+    # Evidence-fit bands (0–100 suitability score, not hiring probability).
+    fit_recommended_min: int = 70
+    fit_stretch_min: int = 50
+    # Default dashboard feed: recommended | recommended_stretch | needs_review | low_fit | all_eligible
+    fit_default_feed: str = "recommended"
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
