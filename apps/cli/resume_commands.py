@@ -98,11 +98,19 @@ def doctor_cmd() -> None:
     typer.echo(f"  Selected PDF engine: {engine.selected or 'NONE'}")
     if not engine.selected:
         typer.echo(f"    → {engine.detail}")
+    from apps.resume_generation.services.pdf_render_service import (
+        describe_word_workspace,
+    )
+
     WORD_CONVERSION_ROOT.mkdir(parents=True, exist_ok=True)
+    choice = describe_word_workspace()
     typer.echo(f"  Word conversion workspace: {WORD_CONVERSION_ROOT}")
+    typer.echo(f"  Word workspace mode: {choice.mode}")
+    typer.echo(f"  Word workspace active path: {choice.path}")
+    typer.echo(f"  Word workspace detail: {choice.detail}")
     typer.echo(
         "  One-time macOS setup: run `resumes authorize-word` once and approve "
-        "Files and Folders access for that workspace only (not Full Disk Access)."
+        "Files and Folders access for the permanent workspace only (not Full Disk Access)."
     )
     typer.echo(f"  PDF validator (pypdf): {'ok' if pypdf_ok else 'MISSING'}")
     typer.echo(

@@ -180,6 +180,83 @@ def test_band_boundaries() -> None:
     )
 
 
+def test_substring_skill_does_not_count_as_evidence() -> None:
+    facts = [
+        _fact(
+            "Built RabbitMQ-powered microservices for ride matching.",
+            skills=["rabbitmq"],
+        )
+    ]
+    job = _job(
+        "Backend Engineer",
+        "Requirements\n- Advanced experience developing software using Scala or Java\n"
+        + (" Distributed backend services. " * 25),
+    )
+    result = assess_evidence_fit(job, facts)
+    scala_reqs = [r for r in result.requirements if "scala" in r.requirement.lower()]
+    assert scala_reqs
+    assert all(
+        "scala" not in r.explanation.lower() or r.evidence_status != "demonstrated"
+        for r in scala_reqs
+    )
+    # 'scala' must not be treated as present merely because of 'microservices'.
+    assert all(
+        "scala" not in (r.explanation or "").lower()
+        for r in scala_reqs
+        if r.evidence_status == "demonstrated"
+    )
+
+
+def test_years_requirement_needs_explicit_years_claim() -> None:
+    facts = [
+        _fact(
+            "Built backend APIs and distributed services on AWS.",
+            skills=["python", "aws", "backend"],
+        )
+    ]
+    job = _job(
+        "Software Developer III",
+        "Requirements\n"
+        "- 5+ years of experience designing and developing backend software "
+        "or distributed systems.\n"
+        + (" Cloud data platforms. " * 20),
+    )
+    result = assess_evidence_fit(job, facts)
+    years_reqs = [r for r in result.requirements if "5+" in r.requirement]
+    assert years_reqs
+    assert all(r.evidence_status != "demonstrated" for r in years_reqs)
+
+
+def test_generic_design_token_is_not_core_demonstration() -> None:
+    facts = [
+        _fact(
+            "Designed internal tooling dashboards for the platform team.",
+            skills=["python"],
+        )
+    ]
+    job = _job(
+        "Software Developer III",
+        "\n".join(
+            [
+                "Lead the design, development, testing, and maintenance of complex "
+                "backend software processors.",
+                "Mentor less experienced Software Developers in relational schema design.",
+            ]
+        )
+        + (" Real-time weather data platforms. " * 15),
+    )
+    result = assess_evidence_fit(job, facts)
+    designish = [
+        r
+        for r in result.requirements
+        if "lead the design" in r.requirement.lower()
+        or "mentor" in r.requirement.lower()
+    ]
+    assert designish
+    assert all(r.evidence_status != "demonstrated" for r in designish)
+    assert result.score < 100
+
+
 def test_location_line_does_not_inflate_to_perfect_score() -> None:
     facts = [
         _fact(

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import fcntl
+import json
+import logging
+import os
 import shutil
 import subprocess
 import tempfile
@@ -16,6 +19,7 @@ from apps.resume_generation.paths import GENERATED_ROOT, OUTPUT_BASENAME, WORD_C
 _WORD_LOCK_PATH = WORD_CONVERSION_ROOT / ".convert.lock"
 _WORD_AUTH_MARKER = WORD_CONVERSION_ROOT / ".authorized"
 _WORD_TIMEOUT_SECONDS = 90
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass
@@ -23,6 +27,13 @@ class PdfEngineStatus:
     word_available: bool
     libreoffice_available: bool
     selected: str | None
+    detail: str
+
+
+@dataclass(frozen=True)
+class WordWorkspaceChoice:
+    path: Path
+    mode: str  # permanent | fallback_stamp | permanent_unverified
     detail: str
 
 
@@ -37,13 +48,14 @@ def detect_pdf_engine() -> PdfEngineStatus:
         word = True
     lo = _which("soffice") or _which("libreoffice")
     if word:
+        choice = describe_word_workspace()
         return PdfEngineStatus(
             word_available=True,
             libreoffice_available=bool(lo),
             selected="microsoft_word",
             detail=(
-                "Microsoft Word.app detected; converts via "
-                f"{WORD_CONVERSION_ROOT}"
+                f"Microsoft Word.app detected; workspace mode={choice.mode} "
+                f"path={choice.path} ({choice.detail})"
             ),
         )
     if lo:
@@ -92,15 +104,63 @@ def _recent_authorized_job_dir() -> Path | None:
     return candidates[0]
 
 
-def resolve_word_workspace() -> Path:
-    """Prefer the stable workspace once authorized; else a prior job stamp."""
+def permanent_workspace_authorized() -> bool:
+    return _WORD_AUTH_MARKER.exists()
+
+
+def describe_word_workspace(*, allow_fallback: bool | None = None) -> WordWorkspaceChoice:
+    """Return the workspace that conversion will use, with an explicit mode label."""
+    if allow_fallback is None:
+        allow_fallback = os.environ.get("GANESHA_WORD_REQUIRE_PERMANENT", "").strip() not in {
+            "1",
+            "true",
+            "yes",
+        }
     WORD_CONVERSION_ROOT.mkdir(parents=True, exist_ok=True)
-    if _WORD_AUTH_MARKER.exists():
-        return WORD_CONVERSION_ROOT
+    if permanent_workspace_authorized():
+        return WordWorkspaceChoice(
+            path=WORD_CONVERSION_ROOT,
+            mode="permanent",
+            detail="authorized marker present; historical-stamp fallback disabled",
+        )
+    if not allow_fallback:
+        return WordWorkspaceChoice(
+            path=WORD_CONVERSION_ROOT,
+            mode="permanent_unverified",
+            detail=(
+                "permanent workspace required but not authorized — run "
+                "`resumes authorize-word`"
+            ),
+        )
     fallback = _recent_authorized_job_dir()
     if fallback is not None:
-        return fallback
-    return WORD_CONVERSION_ROOT
+        return WordWorkspaceChoice(
+            path=fallback,
+            mode="fallback_stamp",
+            detail=(
+                "TRANSITIONAL: using historical stamp until "
+                f"{WORD_CONVERSION_ROOT} is authorized via `resumes authorize-word`"
+            ),
+        )
+    return WordWorkspaceChoice(
+        path=WORD_CONVERSION_ROOT,
+        mode="permanent_unverified",
+        detail="no authorized stamp available; permanent workspace not yet granted",
+    )
+
+
+def resolve_word_workspace(*, allow_fallback: bool | None = None) -> Path:
+    """Prefer the stable workspace once authorized; else a prior job stamp."""
+    choice = describe_word_workspace(allow_fallback=allow_fallback)
+    _LOG.info(
+        "Word conversion workspace mode=%s path=%s (%s)",
+        choice.mode,
+        choice.path,
+        choice.detail,
+    )
+    if choice.mode == "fallback_stamp":
+        _LOG.warning("Word conversion using historical-stamp fallback: %s", choice.path)
+    return choice.path
 
 
 def mark_word_workspace_authorized() -> None:
@@ -115,6 +175,15 @@ def _convert_with_word(docx_path: Path, pdf_path: Path) -> None:
     Finder `open` plus Word `save as PDF` works once the folder is authorized.
     Final artifacts are copied to the job destination by Python afterward.
     """
+    choice = describe_word_workspace()
+    if choice.mode == "permanent_unverified" and os.environ.get(
+        "GANESHA_WORD_REQUIRE_PERMANENT", ""
+    ).strip() in {"1", "true", "yes"}:
+        raise RuntimeError(
+            "Permanent Word workspace required but not authorized. "
+            f"Run: .venv/bin/python -m apps.cli.main resumes authorize-word "
+            f"(workspace {WORD_CONVERSION_ROOT})"
+        )
     workspace = resolve_word_workspace()
     workspace.mkdir(parents=True, exist_ok=True)
     work_id = uuid.uuid4().hex
@@ -165,9 +234,10 @@ end tell
                 _cleanup_work_files(work_docx, work_pdf)
                 raise RuntimeError(
                     f"Word PDF conversion timed out after {_WORD_TIMEOUT_SECONDS}s "
-                    f"staging in {workspace}. If a folder-access dialog appeared, "
-                    "grant access once to that folder (or run `resumes authorize-word` "
-                    f"for {WORD_CONVERSION_ROOT}), then retry. Do not enable Full Disk Access."
+                    f"staging in {workspace} (mode={choice.mode}). If a folder-access "
+                    "dialog appeared, grant access once to that folder (or run "
+                    f"`resumes authorize-word` for {WORD_CONVERSION_ROOT}), then retry. "
+                    "Do not enable Full Disk Access."
                 ) from exc
 
             if not (work_pdf.exists() and work_pdf.stat().st_size > 0):
@@ -175,14 +245,15 @@ end tell
                 _cleanup_work_files(work_docx, work_pdf)
                 raise RuntimeError(
                     "Word PDF conversion failed "
-                    f"(workspace {workspace}): {detail or 'empty PDF'}. "
+                    f"(workspace {workspace}, mode={choice.mode}): "
+                    f"{detail or 'empty PDF'}. "
                     f"One-time setup: `.venv/bin/python -m apps.cli.main resumes "
                     f"authorize-word` for {WORD_CONVERSION_ROOT}."
                 )
 
             pdf_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(work_pdf, pdf_path)
-            if workspace == WORD_CONVERSION_ROOT:
+            if workspace.resolve() == WORD_CONVERSION_ROOT.resolve():
                 mark_word_workspace_authorized()
         finally:
             _cleanup_work_files(work_docx, work_pdf)
@@ -237,12 +308,33 @@ def convert_docx_to_pdf(docx_path: Path, pdf_path: Path) -> Path:
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
     if pdf_path.exists():
         pdf_path.unlink()
+    workspace_choice = (
+        describe_word_workspace() if status.selected == "microsoft_word" else None
+    )
     if status.selected == "microsoft_word":
         _convert_with_word(docx_path, pdf_path)
+        # Re-read after conversion so a newly written .authorized marker is visible.
+        workspace_choice = describe_word_workspace()
     else:
         lo = _which("soffice") or _which("libreoffice")
         assert lo is not None
         _convert_with_libreoffice(docx_path, pdf_path, lo)
     if not pdf_path.exists() or pdf_path.stat().st_size == 0:
         raise RuntimeError("PDF conversion produced an empty or missing file")
+    # Per-run diagnostics: never silently depend on fallback without a record.
+    diagnostics = {
+        "engine": status.selected,
+        "engine_detail": status.detail,
+        "word_workspace_mode": workspace_choice.mode if workspace_choice else None,
+        "word_workspace_path": str(workspace_choice.path) if workspace_choice else None,
+        "word_workspace_detail": workspace_choice.detail if workspace_choice else None,
+        "fallback_used": bool(
+            workspace_choice and workspace_choice.mode == "fallback_stamp"
+        ),
+        "permanent_workspace": str(WORD_CONVERSION_ROOT),
+    }
+    (pdf_path.parent / "word_conversion_diagnostics.json").write_text(
+        json.dumps(diagnostics, indent=2) + "\n",
+        encoding="utf-8",
+    )
     return pdf_path

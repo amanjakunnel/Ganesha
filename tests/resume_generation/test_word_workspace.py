@@ -109,6 +109,35 @@ def test_word_timeout_leaves_prior_desktop_pdf_intact(
     assert desktop.read_bytes() == before
 
 
+def test_describe_workspace_exposes_fallback_mode(tmp_path: Path, monkeypatch) -> None:
+    from apps.resume_generation.services.pdf_render_service import (
+        describe_word_workspace,
+        mark_word_workspace_authorized,
+    )
+
+    workspace = tmp_path / "word_workspace"
+    monkeypatch.setattr(
+        "apps.resume_generation.services.pdf_render_service.WORD_CONVERSION_ROOT",
+        workspace,
+    )
+    monkeypatch.setattr(
+        "apps.resume_generation.services.pdf_render_service._WORD_AUTH_MARKER",
+        workspace / ".authorized",
+    )
+    monkeypatch.setattr(
+        "apps.resume_generation.services.pdf_render_service._recent_authorized_job_dir",
+        lambda: tmp_path / "old_stamp",
+    )
+    (tmp_path / "old_stamp").mkdir()
+    choice = describe_word_workspace(allow_fallback=True)
+    assert choice.mode == "fallback_stamp"
+    assert "TRANSITIONAL" in choice.detail
+    mark_word_workspace_authorized()
+    permanent = describe_word_workspace(allow_fallback=True)
+    assert permanent.mode == "permanent"
+    assert permanent.path == workspace
+
+
 def test_concurrent_word_conversions_do_not_overlap_workspace(
     tmp_path: Path, monkeypatch
 ) -> None:

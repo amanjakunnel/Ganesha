@@ -14,6 +14,10 @@ class StoryEvidence:
     source_bullets: list[str]
     overlap_terms: list[str]
     metric: str | None = None
+    # Human-readable JD responsibility this story answers (not a keyword dump).
+    jd_responsibility: str | None = None
+    # strong = direct responsibility overlap; weak = transferable only.
+    connection: str = "strong"
 
 
 @dataclass

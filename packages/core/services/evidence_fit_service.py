@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from packages.core.domain.models import JobPosting, ResumeFact, hash_text
 from packages.core.settings import settings
 
-FIT_POLICY_VERSION = "evidence-fit-v2"
+FIT_POLICY_VERSION = "evidence-fit-v3"
 
 BAND_RECOMMENDED = "recommended"
 BAND_STRETCH = "stretch"
@@ -110,6 +110,7 @@ DOMAIN_PROFILES: dict[str, dict[str, Any]] = {
     },
 }
 
+# Common languages/platforms alone are not enough for a strong specialty match.
 GENERIC_SKILLS = {
     "python",
     "java",
@@ -125,6 +126,142 @@ GENERIC_SKILLS = {
     "software",
     "computer",
     "science",
+}
+
+# Action/filler words that appear in almost every JD — never "demonstrate" a
+# core capability by themselves (e.g. "design" matching any design work).
+GENERIC_ACTION_FILLER = {
+    "design",
+    "designs",
+    "designed",
+    "designing",
+    "develop",
+    "develops",
+    "developing",
+    "development",
+    "deploying",
+    "years",
+    "developer",
+    "developers",
+    "build",
+    "builds",
+    "built",
+    "implement",
+    "implements",
+    "implementation",
+    "maintain",
+    "maintains",
+    "maintenance",
+    "lead",
+    "leads",
+    "leading",
+    "own",
+    "owns",
+    "ownership",
+    "apply",
+    "applies",
+    "applied",
+    "investigate",
+    "troubleshoot",
+    "resolve",
+    "conduct",
+    "provide",
+    "provides",
+    "mentor",
+    "mentoring",
+    "define",
+    "enhance",
+    "support",
+    "supporting",
+    "including",
+    "system",
+    "systems",
+    "data",
+    "application",
+    "applications",
+    "processor",
+    "processors",
+    "capability",
+    "capabilities",
+    "feature",
+    "features",
+    "practice",
+    "practices",
+    "engineer",
+    "engineers",
+    "experienced",
+    "complex",
+    "advanced",
+    "technical",
+    "operational",
+    "production",
+    "testing",
+    "test",
+    "monitoring",
+    "incident",
+    "incidents",
+    "schema",
+    "schemas",
+    "database",
+    "databases",
+    "backend",
+    "frontend",
+    "platform",
+    "platforms",
+    "workflow",
+    "workflows",
+    "process",
+    "processes",
+    "quality",
+    "reliability",
+    "service",
+    "services",
+    "code",
+    "reviews",
+    "guidance",
+    "collaboration",
+    "knowledge",
+    "sharing",
+    "best",
+    "less",
+    "other",
+    "new",
+    "existing",
+    "easy",
+    "easily",
+    "deployed",
+    "monitored",
+    "validated",
+    "transform",
+    "distribute",
+    "ingest",
+    "source",
+    "through",
+    "used",
+    "using",
+    "based",
+    "software",
+    "engineering",
+    "computer",
+    "science",
+    "skills",
+    "skill",
+    "processing",
+    "concepts",
+    "concept",
+    "efficiency",
+    "objects",
+    "object",
+    "end-to-end",
+    "applying",
+    "experience",
+    "experiences",
+    "distributed",
+    "functional",
+    "programming",
+    "environments",
+    "environment",
+    "with",
 }
 
 SENIORITY_MARKERS = (
@@ -343,7 +480,7 @@ def _extract_requirement_lines(description: str) -> list[tuple[str, str]]:
             continue
         if _is_location_or_office_line(line):
             continue
-        if len(line) < 12 or len(line) > 220:
+        if len(line) > 220:
             continue
         if not re.search(r"[a-zA-Z]", line):
             continue
@@ -354,8 +491,17 @@ def _extract_requirement_lines(description: str) -> list[tuple[str, str]]:
             lower,
         ):
             continue
+        short_skill = len(line) < 12 and bool(
+            re.fullmatch(
+                r"(python|java|aws|azure|gcp|sql|docker|kubernetes|go|rust|"
+                r"c\+\+|typescript|react|node\.?js?)",
+                lower,
+            )
+        )
+        if len(line) < 12 and not short_skill:
+            continue
         # Prefer lines that look like responsibilities/skills, not marketing blurbs.
-        if not re.search(
+        if not short_skill and not re.search(
             r"\b(experience|build|design|develop|own|lead|python|java|aws|"
             r"cloud|api|sql|docker|kubernetes|backend|frontend|data|"
             r"software|engineer|required|responsib|mentor|sql|schema)\b",
@@ -371,21 +517,96 @@ def _extract_requirement_lines(description: str) -> list[tuple[str, str]]:
     return lines
 
 
+def _whole_word_in_blob(token: str, blob: str) -> bool:
+    """Avoid substring false positives (e.g. 'scala' inside 'microservices')."""
+    return (
+        re.search(rf"(?<![a-z0-9+.#-]){re.escape(token)}(?![a-z0-9+.#-])", blob, re.I)
+        is not None
+    )
+
+
+def _candidate_years_claimed(blob: str) -> int | None:
+    """Return the strongest explicit years-of-experience claim in evidence, if any."""
+    values = [int(v) for v in re.findall(r"\b(\d+)\s*\+?\s*years?\b", blob, re.I)]
+    return max(values) if values else None
+
+
 def _match_requirement(
     requirement: str, candidate_blob: str, candidate_skills: set[str]
 ) -> RequirementEvidence:
-    tokens = [
-        t.lower()
-        for t in re.findall(r"[a-zA-Z][a-zA-Z0-9+.#-]{2,}", requirement)
-        if t.lower() not in _MATCH_STOP
+    tokens = []
+    for raw in re.findall(r"[a-zA-Z][a-zA-Z0-9+.#-]{2,}", requirement):
+        # Trailing '.' from sentence ends must not create distinct tokens
+        # (e.g. "concepts." bypassing the "concepts" filler entry).
+        t = raw.lower().rstrip(".")
+        if len(t) < 3 or t in _MATCH_STOP:
+            continue
+        tokens.append(t)
+    hits = [
+        t
+        for t in tokens
+        if t in candidate_skills or _whole_word_in_blob(t, candidate_blob)
     ]
-    hits = [t for t in tokens if t in candidate_blob or t in candidate_skills]
-    meaningful = [t for t in hits if t not in GENERIC_SKILLS and t not in _LOCATION_NOISE]
-    # Require at least two meaningful overlaps, or one known tech skill hit.
-    tech_hits = [t for t in meaningful if t in candidate_skills or len(t) >= 4]
-    if len(meaningful) >= 2 or (len(meaningful) == 1 and meaningful[0] in candidate_skills):
+    filler = GENERIC_ACTION_FILLER | _LOCATION_NOISE
+    # Inventory skill tags that also appear in the requirement.
+    tech_hits = [t for t in hits if t in candidate_skills]
+    # Non-filler content (may include tech names and domain nouns).
+    non_filler = [t for t in hits if t not in filler]
+    # "backend"/"software" skill tags are too generic to prove a specialty alone.
+    substantive_tech = [t for t in tech_hits if t not in filler]
+    compact_requirement = len(tokens) <= 6
+    years_needed = re.search(r"\b(\d+)\s*\+?\s*years?\b", requirement, re.I)
+    if years_needed:
+        needed = int(years_needed.group(1))
+        claimed = _candidate_years_claimed(candidate_blob)
+        if claimed is None or claimed < needed:
+            status = STATUS_ADJACENT if (substantive_tech or non_filler) else STATUS_NOT_DEMONSTRATED
+            explanation = (
+                f"Posting asks for {needed}+ years; verified evidence does not "
+                "state a matching years-of-experience claim."
+            )
+            importance = "high"
+            if any(x in requirement.lower() for x in ("preferred", "nice to have", "bonus")):
+                importance = "low"
+            return RequirementEvidence(
+                requirement=requirement[:180],
+                classification="preferred" if importance == "low" else "required",
+                supporting_fact_ids=[],
+                evidence_status=status,
+                importance=importance,
+                explanation=explanation,
+            )
+    if re.search(r"\bmentor", requirement, re.I) and not re.search(
+        r"\bmentor", candidate_blob, re.I
+    ):
+        status = STATUS_NOT_DEMONSTRATED
+        explanation = (
+            "Mentorship is required, but mentoring is not demonstrated in "
+            "verified evidence."
+        )
+    elif substantive_tech and len(non_filler) >= 1:
         status = STATUS_DEMONSTRATED
-        explanation = f"Verified evidence overlaps on: {', '.join(tech_hits[:4] or meaningful[:4])}."
+        shown = list(dict.fromkeys([*substantive_tech, *non_filler]))[:4]
+        explanation = f"Verified inventory supports this via: {', '.join(shown)}."
+    elif substantive_tech and compact_requirement:
+        # Short skill lines ("Python", "AWS", "Docker and Kubernetes").
+        status = STATUS_DEMONSTRATED
+        explanation = (
+            f"Verified inventory includes required skill(s): "
+            f"{', '.join(substantive_tech[:4])}."
+        )
+    elif tech_hits:
+        status = STATUS_ADJACENT
+        explanation = (
+            f"Only thin skill overlap ({', '.join(tech_hits[:3])}); "
+            "generic wording like design/lead is not treated as core proof."
+        )
+    elif non_filler and len(non_filler) >= 2:
+        status = STATUS_ADJACENT
+        explanation = (
+            f"Transferable wording overlap ({', '.join(non_filler[:3])}); "
+            "specialty tools not clearly demonstrated."
+        )
     elif hits:
         status = STATUS_ADJACENT
         explanation = (
@@ -399,6 +620,10 @@ def _match_requirement(
         importance = "low"
     elif status == STATUS_ADJACENT:
         importance = "medium"
+    # Mentorship / senior lead language is high importance when required.
+    if re.search(r"\b(mentor|staff|principal|lead the design|10\+|8\+)\b", requirement, re.I):
+        if importance != "low":
+            importance = "high"
     return RequirementEvidence(
         requirement=requirement[:180],
         classification="preferred" if importance == "low" else "required",
@@ -463,14 +688,21 @@ def detect_domain_mismatch(
 def _seniority_gap(title: str, description: str, candidate_blob: str) -> bool:
     blob = f"{title}\n{description}".lower()
     if not any(re.search(pat, blob, flags=re.I) for pat in SENIORITY_MARKERS):
-        return False
+        # Explicit mentorship as a required operating mode still counts.
+        if not re.search(r"\bmentor(ing|ship)?\b", blob, flags=re.I):
+            return False
     # Early-career candidate inventory typically lacks long ownership language.
     ownership = len(
-        re.findall(r"\b(led|owned|architected|managed team|roadmap)\b", candidate_blob)
+        re.findall(r"\b(led|owned|architected|managed team|roadmap|mentored)\b", candidate_blob)
     )
-    return ownership == 0 and bool(
-        re.search(r"\b(10\+|8\+|staff|principal)\b", blob, flags=re.I)
-    )
+    senior_title = bool(re.search(r"\b(10\+|8\+|staff|principal|iii|sr\.?)\b", blob, flags=re.I))
+    mentor_required = bool(re.search(r"\bmentor(ing|ship)?\b", blob, flags=re.I))
+    if ownership > 0:
+        # Mentorship asked but never demonstrated remains a gap even with "led".
+        if mentor_required and not re.search(r"\bmentor", candidate_blob, flags=re.I):
+            return True
+        return False
+    return senior_title or mentor_required
 
 
 def band_for_score(

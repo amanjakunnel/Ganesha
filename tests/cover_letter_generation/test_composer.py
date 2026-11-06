@@ -35,7 +35,7 @@ def test_deterministic_letter_names_role_and_company(session, tmp_path: Path) ->
     assert "Software Engineer" in body
     assert letter.salutation == "Dear ComposerCo Hiring Team,"
     assert letter.signature_name == "Alex Michael Manjakunnel"
-    assert 160 <= word_count(body) <= 350
+    assert 140 <= word_count(body) <= 350
     assert len(letter.paragraphs) == 3
     from apps.cover_letter_generation.services.cover_letter_composer_service import (
         allowed_numbers,
@@ -68,6 +68,35 @@ def test_no_api_key_path_is_deterministic(session, tmp_path: Path, monkeypatch) 
     assert "concrete fit" not in body
     assert "the verified work involved" not in body
     assert "the strongest related example is" not in body
+    assert "the posting emphasizes" not in body
+    assert "i am writing about the" not in body
+    # Must not dump raw matcher tokens as the relevance story.
+    assert "emphasizes aws" not in body
+    assert "emphasizes python" not in body
+
+
+def test_letter_uses_responsibility_not_keyword_dump(session, tmp_path: Path) -> None:
+    plan = _plan(session, tmp_path)
+    assert plan.primary is not None
+    assert plan.primary.jd_responsibility
+    letter = compose_deterministic(plan)
+    body = "\n".join(letter.paragraphs)
+    lower = body.lower()
+    assert "aws and azure" not in lower
+    assert "the posting emphasizes" not in lower
+    assert "posting ask" not in lower
+    assert "asks for this:" not in lower
+    assert "i am writing about the" not in lower
+    # Responsibility phrasing should appear as a natural need, not a matcher dump.
+    assert plan.primary.jd_responsibility
+    # At least one gerund/noun fragment from the attached responsibility should appear.
+    first = plan.primary.jd_responsibility.split()[0].lower()
+    assert first in lower or any(
+        token in lower
+        for token in plan.primary.jd_responsibility.lower().split()[1:4]
+    )
+    if "aws" in body.lower():
+        assert "AWS" in body
 
 
 def test_letter_adds_context_beyond_resume_bullets(session, tmp_path: Path) -> None:
@@ -75,7 +104,13 @@ def test_letter_adds_context_beyond_resume_bullets(session, tmp_path: Path) -> N
     letter = compose_deterministic(plan)
     body = "\n".join(letter.paragraphs)
     assert "ComposerCo" in body
-    assert "because" in body.lower() or "connection" in body.lower() or "useful" in body.lower()
+    assert (
+        "because" in body.lower()
+        or "useful" in body.lower()
+        or "matters for" in body.lower()
+        or "bring that same" in body.lower()
+        or "partially covers" in body.lower()
+    )
     for bullet in plan.primary.source_bullets if plan.primary else []:
         cleaned = " ".join(bullet.split())
         if len(cleaned) >= 40:

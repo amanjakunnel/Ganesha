@@ -105,6 +105,164 @@ def _terms(text: str, keywords: list[str], description: str = "") -> list[str]:
     return hits[:4]
 
 
+_RESP_STOP = {
+    "and",
+    "the",
+    "with",
+    "for",
+    "you",
+    "will",
+    "our",
+    "this",
+    "that",
+    "from",
+    "have",
+    "are",
+    "job",
+    "role",
+    "team",
+    "work",
+    "using",
+    "ability",
+    "experience",
+    "including",
+    "through",
+    "their",
+    "your",
+    "into",
+    "such",
+    "than",
+    "also",
+    "over",
+}
+
+
+def _content_tokens(text: str) -> set[str]:
+    # Keep technical nouns (backend, cloud, production) — they are useful for
+    # responsibility matching even when too generic for skill dumps.
+    return {
+        tok
+        for tok in re.findall(r"[a-zA-Z][a-zA-Z0-9+.#-]{2,}", text.lower())
+        if tok not in _RESP_STOP
+    }
+
+
+def _extract_jd_responsibilities(description: str) -> list[str]:
+    """Pull short responsibility phrases from the posting for letter narration."""
+    lines: list[str] = []
+    for raw in (description or "").splitlines():
+        line = raw.strip().lstrip("•-*–— ").strip()
+        if not line:
+            continue
+        if len(line) > 220:
+            for sent in re.split(r"(?<=[.!;])\s+", line):
+                cleaned = sent.strip().lstrip("•-*–— ").strip()
+                if cleaned:
+                    lines.append(cleaned)
+            continue
+        lines.append(line)
+    responsibilities: list[str] = []
+    for line in lines:
+        lower = line.lower()
+        if re.search(
+            r"\b(we are open to hiring|headquarters|remote|hybrid|benefits|"
+            r"equal opportunity|about the company|someone who likes|"
+            r"passion for|deep interest|want to be part)\b",
+            lower,
+        ):
+            continue
+        if not re.search(
+            r"\b(lead|own|design|develop|build|implement|maintain|mentor|"
+            r"troubleshoot|collaborate|deliver|process|deploy|monitor)\b",
+            lower,
+        ):
+            continue
+        # Prefer imperative responsibility lines over soft prose.
+        if not re.match(
+            r"^(lead|own|design|develop|build|implement|maintain|mentor|"
+            r"troubleshoot|collaborate|deliver|deploy|monitor|apply|"
+            r"investigate|conduct|define)\b",
+            lower,
+        ):
+            continue
+        if len(line) < 28 or len(line) > 180:
+            continue
+        responsibilities.append(" ".join(line.split()))
+        if len(responsibilities) >= 10:
+            break
+    return responsibilities
+
+
+def _attach_responsibility(
+    story: StoryEvidence, responsibilities: list[str]
+) -> StoryEvidence:
+    blob_tokens = _content_tokens(" ".join(story.source_bullets))
+    skill_tokens = {term.lower() for term in story.overlap_terms}
+    best: str | None = None
+    best_score = 0
+    for resp in responsibilities:
+        resp_tokens = _content_tokens(resp)
+        shared = blob_tokens & resp_tokens
+        # Prefer shared technical/action substance over single generic words.
+        score = len(shared) + 3 * len(shared & skill_tokens)
+        if score > best_score:
+            best_score = score
+            best = resp
+    if best is None and responsibilities:
+        best = responsibilities[0]
+        best_score = 0
+    connection = "strong" if best_score >= 2 else "weak"
+    # Shorten for prose without sounding like a keyword dump.
+    responsibility = None
+    if best and best_score > 0:
+        words = best.split()
+        # Keep the ask readable in a letter; cut at a natural boundary.
+        responsibility = " ".join(words[:14]).rstrip(",;:")
+        for sep in (", ", "; ", " including ", " that ", " with "):
+            idx = responsibility.rfind(sep)
+            if idx >= 40:
+                responsibility = responsibility[:idx].rstrip(",;:")
+                break
+        if len(words) > 14 and not responsibility.endswith("."):
+            responsibility = responsibility.rstrip(".")
+    elif best_score == 0:
+        # No lexical overlap: do not pretend a random JD line is the link.
+        # Prefer an operational ask when the story looks ops/reliability oriented.
+        blob = " ".join(story.source_bullets).lower()
+        operational = next(
+            (
+                resp
+                for resp in responsibilities
+                if re.search(
+                    r"\b(troubleshoot|monitor|incident|operat|pipeline|deploy|alert)\b",
+                    resp,
+                    re.I,
+                )
+                and re.search(
+                    r"\b(troubleshoot|monitor|incident|pipeline|deploy|alert\w*|"
+                    r"health|fail\w*|kafka|ansible)\b",
+                    blob,
+                    re.I,
+                )
+            ),
+            None,
+        )
+        if operational:
+            words = operational.split()
+            responsibility = " ".join(words[:14]).rstrip(",;:")
+            connection = "weak"
+        else:
+            responsibility = "Deliver reliable software for the posted role"
+            connection = "weak"
+    else:
+        # Fixture/short JDs may lack responsibility lines; stay role-based, not token-based.
+        responsibility = "Deliver reliable software for the posted role"
+        connection = "weak"
+    story.jd_responsibility = responsibility
+    story.connection = connection
+    return story
+
+
 def _from_experience(
     entry: ExperienceEntry, keywords: list[str], description: str
 ) -> StoryEvidence | None:
@@ -154,12 +312,17 @@ def _score(story: StoryEvidence) -> int:
         base += 4
     if story.metric:
         base += 2
+    if story.connection == "strong":
+        base += 6
+    elif story.jd_responsibility:
+        base += 1
     return base
 
 
 def select_stories(
     document: ResumeDocument, keywords: list[str], description: str = ""
 ) -> tuple[StoryEvidence | None, StoryEvidence | None, list[str]]:
+    responsibilities = _extract_jd_responsibilities(description)
     stories: list[StoryEvidence] = []
     for experience in document.experience:
         story = _from_experience(experience, keywords, description)
@@ -169,14 +332,37 @@ def select_stories(
         project_story = _from_project(project, keywords, description)
         if project_story:
             stories.append(project_story)
+    # Score after provisional responsibility attach.
+    for story in stories:
+        _attach_responsibility(story, responsibilities)
     stories.sort(key=_score, reverse=True)
     if not stories:
         return None, None, []
     primary = stories[0]
-    secondary = next(
-        (story for story in stories[1:] if story.label != primary.label),
-        None,
-    )
+    # Prefer a second employment story when scores are close.
+    secondary = None
+    for story in stories[1:]:
+        if story.label == primary.label:
+            continue
+        if story.kind == "experience" or primary.kind != "experience":
+            secondary = story
+            break
+    if secondary is None:
+        secondary = next(
+            (story for story in stories[1:] if story.label != primary.label),
+            None,
+        )
+    # Re-bind responsibilities so primary and secondary do not narrate the same ask.
+    primary = _attach_responsibility(primary, responsibilities)
+    if secondary is not None:
+        remaining = [
+            resp
+            for resp in responsibilities
+            if not primary.jd_responsibility
+            or primary.jd_responsibility.rstrip("…")[:48].lower()
+            not in resp.lower()
+        ]
+        secondary = _attach_responsibility(secondary, remaining or responsibilities)
     used = set(primary.fact_ids)
     if secondary:
         used.update(secondary.fact_ids)

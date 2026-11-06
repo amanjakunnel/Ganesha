@@ -39,6 +39,16 @@ _GENERIC = (
     "cutting-edge",
     "seamless",
     "leverage my passion",
+    "the posting emphasizes",
+    "i am writing about the",
+    "shared need for",
+    "overlap on",
+    "posting ask",
+    "posting asks for this",
+    "this posting ask",
+    "asks for this:",
+    "responsibility that stands out is:",
+    "verified result of",
 )
 _FORBIDDEN = re.compile(
     r"\b(work authorization|f-1|opt|stem opt|sponsorship|citizenship|visa|"
@@ -63,32 +73,112 @@ _STYLE_WARN = (
 )
 
 # Prefer shorter concrete letters over padded filler (documented migration from 225).
-MIN_WORDS = 160
+MIN_WORDS = 140
 MAX_WORDS = 350
+
+_TECH_CAPS = {
+    "aws": "AWS",
+    "azure": "Azure",
+    "gcp": "GCP",
+    "kafka": "Kafka",
+    "kubernetes": "Kubernetes",
+    "k8s": "Kubernetes",
+    "docker": "Docker",
+    "jenkins": "Jenkins",
+    "terraform": "Terraform",
+    "ansible": "Ansible",
+    "python": "Python",
+    "java": "Java",
+    "javascript": "JavaScript",
+    "typescript": "TypeScript",
+    "sql": "SQL",
+    "api": "API",
+    "apis": "APIs",
+    "rest": "REST",
+    "ci/cd": "CI/CD",
+    "mern": "MERN",
+    "pytorch": "PyTorch",
+    "mongodb": "MongoDB",
+    "rabbitmq": "RabbitMQ",
+}
 
 
 def word_count(text: str) -> int:
     return len(re.findall(r"[A-Za-z0-9']+", text))
 
 
-def _phrase(terms: list[str]) -> str:
-    cleaned = [term for term in terms if term]
-    if not cleaned:
-        return "the posted technical requirements"
-    if len(cleaned) == 1:
-        return cleaned[0]
-    if len(cleaned) == 2:
-        return f"{cleaned[0]} and {cleaned[1]}"
-    return ", ".join(cleaned[:-1]) + f", and {cleaned[-1]}"
+def capitalize_technologies(text: str) -> str:
+    """Normalize known technology names without rewriting surrounding prose."""
+
+    def repl(match: re.Match[str]) -> str:
+        raw = match.group(0)
+        key = raw.lower()
+        return _TECH_CAPS.get(key, raw)
+
+    pattern = re.compile(
+        r"\b(" + "|".join(re.escape(k) for k in sorted(_TECH_CAPS, key=len, reverse=True)) + r")\b",
+        re.I,
+    )
+    return pattern.sub(repl, text)
 
 
-def _focus(plan: CoverLetterPlan) -> str:
-    terms: list[str] = []
-    if plan.primary:
-        terms.extend(plan.primary.overlap_terms[:3])
-    if not terms:
-        terms.append(plan.role_family.replace("_", " "))
-    return _phrase(terms)
+_VERB_TO_GERUND = {
+    "own": "owning",
+    "lead": "leading",
+    "design": "designing",
+    "develop": "developing",
+    "build": "building",
+    "implement": "implementing",
+    "maintain": "maintaining",
+    "mentor": "mentoring",
+    "troubleshoot": "troubleshooting",
+    "investigate": "investigating",
+    "collaborate": "collaborating",
+    "deliver": "delivering",
+    "deploy": "deploying",
+    "monitor": "monitoring",
+    "apply": "applying",
+    "conduct": "conducting",
+    "define": "defining",
+    "resolve": "resolving",
+}
+
+
+def _natural_responsibility(story: StoryEvidence | None, plan: CoverLetterPlan) -> str:
+    """Brief gerund/noun phrase from a JD responsibility — not a colon-pasted dump."""
+    raw = ""
+    if story and story.jd_responsibility:
+        raw = story.jd_responsibility.strip().rstrip(".")
+    if not raw:
+        family = plan.role_family.replace("_", " ")
+        return f"reliable {family} delivery"
+    words = raw.split()
+    lead = re.sub(r"[^a-zA-Z]+$", "", words[0])
+    first = lead.lower()
+    if first in _VERB_TO_GERUND:
+        words[0] = _VERB_TO_GERUND[first] + words[0][len(lead) :]
+    joined = " ".join(words)
+    # "investigating, troubleshoot, and resolve X" → "investigating X"
+    gerunds = "|".join(
+        re.escape(g) for g in sorted(_VERB_TO_GERUND.values(), key=len, reverse=True)
+    )
+    joined = re.sub(
+        rf"^({gerunds})(?:,\s*[A-Za-z]+)*,\s+and\s+[A-Za-z]+\s+",
+        r"\1 ",
+        joined,
+        count=1,
+        flags=re.I,
+    )
+    joined = re.sub(
+        rf"^({gerunds})\s+and\s+[A-Za-z]+\s+",
+        r"\1 ",
+        joined,
+        count=1,
+        flags=re.I,
+    )
+    # Keep the responsibility readable; drop trailing clauses that read as JD paste.
+    clipped = _clip_words(joined, 12)
+    return clipped[0].lower() + clipped[1:] if clipped else clipped
 
 
 def _clip_words(text: str, limit: int = 22) -> str:
@@ -125,7 +215,6 @@ def _bullet_clause(story: StoryEvidence) -> str:
     Uses a shortened verified fragment so the letter explains relevance instead of
     pasting the resume bullet verbatim.
     """
-    terms = _phrase(story.overlap_terms[:3]) if story.overlap_terms else story.label
     raw = ""
     source = ""
     for bullet in story.source_bullets:
@@ -138,16 +227,22 @@ def _bullet_clause(story: StoryEvidence) -> str:
         raw = " ".join(story.source_bullets[0].split()).strip().rstrip(".")
         source = raw
     if not raw:
-        return f"worked on {terms}"
+        return "did related engineering work I can discuss from that role"
     # Prefer the action clause as written; only reframe the leading verb for grammar.
     if raw[0].isupper() and raw.split()[0].lower() not in {"i", "my", "our"}:
         raw = raw[0].lower() + raw[1:]
     words = raw.split()
-    # Short bullets would otherwise paste verbatim; keep the technical gist only.
-    if len(source) < 55 or len(words) <= 10:
-        return f"handled {terms} work day to day in that role"
-    # Longer bullets: keep a partial action fragment, not the full resume line.
-    return _clip_words(raw, 14)
+    # Short bullets reproduce verbatim too easily; keep only a verb-led stub.
+    if len(source) < 60 or len(words) <= 10:
+        stub = " ".join(words[:5]).rstrip(",;:")
+        if len(stub) >= 40 and stub.lower() in source.lower():
+            stub = " ".join(words[:3]).rstrip(",;:")
+        return stub or "did related engineering work in that role"
+    clipped = _clip_words(raw, 14)
+    # Guard against recreating a full resume bullet (>=40 chars).
+    if len(source) >= 40 and source.lower() in f"i {clipped}".lower():
+        clipped = _clip_words(raw, 7)
+    return clipped or "did related engineering work in that role"
 
 
 def _employer_label(story: StoryEvidence) -> str:
@@ -159,36 +254,49 @@ def _employer_label(story: StoryEvidence) -> str:
 def _metric_clause(story: StoryEvidence) -> str:
     if not story.metric:
         return ""
-    return f" One verified result from that work is {story.metric}."
+    # Keep the verified figure; do not invent what the number measured.
+    return f" A recorded outcome from that work was {story.metric}."
 
 
 def _story_paragraph(
-    story: StoryEvidence, *, role: str, company: str, pattern: int
+    story: StoryEvidence,
+    *,
+    plan: CoverLetterPlan,
+    pattern: int,
 ) -> str:
     clause = _bullet_clause(story)
     where = _employer_label(story)
     metric = _metric_clause(story)
-    focus = _phrase(story.overlap_terms[:3]) if story.overlap_terms else "this work"
+    ask = _natural_responsibility(story, plan)
+    role = plan.role
+    company = plan.company
+    if story.connection == "weak":
+        return (
+            f"The closest verified example is {where}, where I {clause}.{metric} "
+            f"It only partially covers {ask} for {company}, so I would keep that "
+            f"claim bounded in an interview rather than stretch it. The value is "
+            f"the concrete systems I can describe, not a stronger ownership claim."
+        )
     if pattern % 3 == 0:
         return (
             f"As {where}, I {clause}.{metric} "
-            f"That experience is useful for the {role} role at {company} because "
-            f"the posting emphasizes {focus}. In an interview I can walk through "
-            f"the systems, tradeoffs, and scope of that work without stretching "
-            f"into tools I have not used."
+            f"That experience is useful for {role} work at {company} because it "
+            f"already involved production systems adjacent to {ask}. I can walk "
+            f"through those systems and tradeoffs in an interview without claiming "
+            f"tools or outcomes outside the record."
         )
     if pattern % 3 == 1:
         return (
             f"One concrete example is {where}, where I {clause}.{metric} "
-            f"For {company}, the connection is the shared need for {focus} rather "
-            f"than a generic skills list. The detail I would discuss is how that "
-            f"work was operated and maintained, not a restatement of my resume."
+            f"For {company}, that matters for {ask}: the same production habits "
+            f"are what I can discuss with specifics rather than a restated resume "
+            f"line. I stay with what that role actually covered."
         )
     return (
         f"Relevant experience comes from {where}: I {clause}.{metric} "
-        f"I would apply the same approach to the {role} responsibilities at "
-        f"{company}, staying inside what that posting and my record both support "
-        f"and keeping the discussion on {focus}."
+        f"I would bring that same operating approach to {ask} in the {role} role "
+        f"at {company}, staying inside what both the posting and my record support "
+        f"and leaving room to discuss the boundaries of that experience."
     )
 
 
@@ -208,7 +316,7 @@ def _company_sentence(plan: CoverLetterPlan) -> str:
 
 
 def _opening(plan: CoverLetterPlan) -> str:
-    focus = _focus(plan)
+    ask = _natural_responsibility(plan.primary, plan)
     voice = plan.voice if plan.voice in {
         "technical_direct",
         "product_oriented",
@@ -221,28 +329,28 @@ def _opening(plan: CoverLetterPlan) -> str:
     company_bit = _company_sentence(plan)
     if voice == "product_oriented":
         angle = (
-            f"The posting centers on reliable {focus} for people who depend on "
-            f"the product, which matches work I have already shipped."
+            f"The product-facing need I can address is {ask}. "
+            f"I answer that with verified work below, not with generic praise."
         )
     elif voice == "startup_fast_paced":
         angle = (
-            f"The role asks for end-to-end ownership around {focus}, which is "
-            f"the part of my background I can discuss with specifics."
+            f"The ownership need I can speak to is {ask}. "
+            f"That is the part of my background I can discuss with specifics."
         )
     elif voice == "large_company_professional":
         angle = (
-            f"The bar described is careful delivery of {focus}, and that is the "
-            f"evidence I lead with below."
+            f"The operating need I lead with is {ask}. "
+            f"The examples below stay inside verified evidence for that work."
         )
     elif voice == "mission_oriented":
         angle = (
-            f"Where official material supports it, the {focus} work is the "
-            f"connection I can make from verified experience."
+            f"Where official material supports it, I can connect verified "
+            f"experience to {ask}."
         )
     else:
         angle = (
-            f"I am writing about the {focus} work in the posting, using examples "
-            f"I can defend with the record below."
+            f"A core need in the role is {ask}. "
+            f"Below I connect verified work to that responsibility."
         )
     return (
         f"I am applying for the {plan.role} position at {plan.company}. "
@@ -251,21 +359,20 @@ def _opening(plan: CoverLetterPlan) -> str:
 
 
 def _closing(plan: CoverLetterPlan, *, used_secondary: bool) -> str:
-    focus = _focus(plan)
     if used_secondary and plan.secondary:
         return (
-            f"Taken together, those examples cover the {focus} work the "
-            f"{plan.role} posting describes at a level I can defend with specifics. "
+            f"Taken together, those examples stay inside verified work. "
             f"I would welcome a conversation about how that background applies at "
             f"{plan.company}."
         )
     primary = plan.primary
     where = _employer_label(primary) if primary else "that work"
+    ask = _natural_responsibility(primary, plan)
     return (
-        f"I would bring the same approach from {where} to the {plan.role} work at "
-        f"{plan.company}, staying with {focus} rather than stretching into tools "
-        f"I have not used. I am available to discuss the implementation details "
-        f"and the boundaries of that experience."
+        f"I would bring the same approach from {where} to {ask} in the "
+        f"{plan.role} role at {plan.company}, without stretching into tools I "
+        f"have not used. I am available to discuss the boundaries of that "
+        f"experience."
     )
 
 
@@ -277,14 +384,11 @@ def compose_deterministic(plan: CoverLetterPlan, *, today: datetime | None = Non
     salutation = f"Dear {plan.company} Hiring Team,"
     seed = int(hashlib.sha1(plan.primary.label.encode()).hexdigest()[:8], 16)
     paragraph_1 = _opening(plan)
-    paragraph_2 = _story_paragraph(
-        plan.primary, role=plan.role, company=plan.company, pattern=seed
-    )
+    paragraph_2 = _story_paragraph(plan.primary, plan=plan, pattern=seed)
     if plan.secondary:
         paragraph_3 = _story_paragraph(
             plan.secondary,
-            role=plan.role,
-            company=plan.company,
+            plan=plan,
             pattern=seed + 1,
         )
         # Keep three paragraphs: fold a short close into paragraph 3.
@@ -293,7 +397,9 @@ def compose_deterministic(plan: CoverLetterPlan, *, today: datetime | None = Non
         )
     else:
         paragraph_3 = _closing(plan, used_secondary=False)
-    paragraphs = [paragraph_1, paragraph_2, paragraph_3]
+    paragraphs = [
+        capitalize_technologies(part) for part in (paragraph_1, paragraph_2, paragraph_3)
+    ]
     fact_ids = list(plan.primary.fact_ids)
     if plan.secondary:
         fact_ids.extend(plan.secondary.fact_ids)
@@ -337,8 +443,12 @@ def style_warnings(document: CoverLetterDocument) -> list[str]:
     norms = [" ".join(p.lower().split()) for p in document.paragraphs]
     for i, left in enumerate(norms):
         for right in norms[i + 1 :]:
-            shared = set(left.split()) & set(right.split())
-            if len(shared) >= 22:
+            left_words = left.split()
+            right_words = right.split()
+            shared = set(left_words) & set(right_words)
+            denom = max(len(left_words), len(right_words), 1)
+            # Shared responsibility phrases are expected; warn only on near-copies.
+            if len(shared) / denom >= 0.55 and denom >= 35:
                 warnings.append("Style caution: paragraphs share substantial wording")
                 break
     if _INFLATED.search(body):
