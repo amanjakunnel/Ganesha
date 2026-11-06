@@ -207,6 +207,68 @@ def test_substring_skill_does_not_count_as_evidence() -> None:
     )
 
 
+def test_sql_skill_alone_is_not_schema_ownership() -> None:
+    facts = [_fact("Wrote SQL queries for reporting dashboards.", skills=["sql"])]
+    job = _job(
+        "Software Developer III",
+        "Requirements\n"
+        "- Own design and implementation of database schemas and supporting "
+        "SQL objects used by backend processing applications.\n"
+        + (" Weather data platforms. " * 20),
+    )
+    result = assess_evidence_fit(job, facts)
+    schema = [
+        r
+        for r in result.requirements
+        if "schema" in r.requirement.lower() or "sql objects" in r.requirement.lower()
+    ]
+    assert schema
+    assert all(r.evidence_status != "demonstrated" for r in schema)
+    assert any("ownership" in r.explanation.lower() or "familiarity" in r.explanation.lower() for r in schema)
+
+
+def test_java_alone_is_not_java_plus_functional_programming() -> None:
+    facts = [
+        _fact(
+            "Built backend services in Java for internal tooling.",
+            skills=["java"],
+        )
+    ]
+    job = _job(
+        "Software Developer III",
+        "Requirements\n"
+        "- Advanced experience developing software using Scala or Java, with "
+        "experience applying functional programming concepts.\n"
+        + (" Cloud data platforms. " * 20),
+    )
+    result = assess_evidence_fit(job, facts)
+    lang = [r for r in result.requirements if "scala or java" in r.requirement.lower()]
+    assert lang
+    assert all(r.evidence_status == "adjacent" for r in lang)
+    assert any("functional" in r.explanation.lower() for r in lang)
+
+
+def test_java_with_fp_evidence_can_demonstrate_compound_language_req() -> None:
+    facts = [
+        _fact(
+            "Built Java services using functional programming with immutable "
+            "collections and higher-order stream transforms.",
+            skills=["java"],
+        )
+    ]
+    job = _job(
+        "Software Developer III",
+        "Requirements\n"
+        "- Advanced experience developing software using Scala or Java, with "
+        "experience applying functional programming concepts.\n"
+        + (" Cloud data platforms. " * 20),
+    )
+    result = assess_evidence_fit(job, facts)
+    lang = [r for r in result.requirements if "scala or java" in r.requirement.lower()]
+    assert lang
+    assert all(r.evidence_status == "demonstrated" for r in lang)
+
+
 def test_years_requirement_needs_explicit_years_claim() -> None:
     facts = [
         _fact(

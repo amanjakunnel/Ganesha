@@ -22,7 +22,7 @@ from apps.cover_letter_generation.schemas import (
 )
 from packages.core.settings import settings
 
-# Hard blockers: fluff or house boilerplate that replaces substance.
+# Hard blockers: fluff, matcher narration, or internal process leakage.
 _GENERIC = (
     "i am excited to apply",
     "this aligns perfectly",
@@ -49,6 +49,24 @@ _GENERIC = (
     "asks for this:",
     "responsibility that stands out is:",
     "verified result of",
+    "recorded outcome",
+    "below i connect verified",
+    "verified work",
+    "verified evidence",
+    "verified experience",
+    "outside the record",
+    "stay inside verified",
+    "staying inside",
+    "keep that claim bounded",
+    "claim bounded",
+    "in an interview rather than",
+    "without claiming tools",
+    "boundaries of that experience",
+    "stronger ownership claim",
+    "partially covers",
+    "adjacent to",
+    "production systems adjacent",
+    "closest verified example",
 )
 _FORBIDDEN = re.compile(
     r"\b(work authorization|f-1|opt|stem opt|sponsorship|citizenship|visa|"
@@ -73,7 +91,7 @@ _STYLE_WARN = (
 )
 
 # Prefer shorter concrete letters over padded filler (documented migration from 225).
-MIN_WORDS = 140
+MIN_WORDS = 100
 MAX_WORDS = 350
 
 _TECH_CAPS = {
@@ -122,63 +140,18 @@ def capitalize_technologies(text: str) -> str:
     return pattern.sub(repl, text)
 
 
-_VERB_TO_GERUND = {
-    "own": "owning",
-    "lead": "leading",
-    "design": "designing",
-    "develop": "developing",
-    "build": "building",
-    "implement": "implementing",
-    "maintain": "maintaining",
-    "mentor": "mentoring",
-    "troubleshoot": "troubleshooting",
-    "investigate": "investigating",
-    "collaborate": "collaborating",
-    "deliver": "delivering",
-    "deploy": "deploying",
-    "monitor": "monitoring",
-    "apply": "applying",
-    "conduct": "conducting",
-    "define": "defining",
-    "resolve": "resolving",
-}
-
-
-def _natural_responsibility(story: StoryEvidence | None, plan: CoverLetterPlan) -> str:
-    """Brief gerund/noun phrase from a JD responsibility — not a colon-pasted dump."""
-    raw = ""
-    if story and story.jd_responsibility:
-        raw = story.jd_responsibility.strip().rstrip(".")
-    if not raw:
-        family = plan.role_family.replace("_", " ")
-        return f"reliable {family} delivery"
-    words = raw.split()
-    lead = re.sub(r"[^a-zA-Z]+$", "", words[0])
-    first = lead.lower()
-    if first in _VERB_TO_GERUND:
-        words[0] = _VERB_TO_GERUND[first] + words[0][len(lead) :]
-    joined = " ".join(words)
-    # "investigating, troubleshoot, and resolve X" → "investigating X"
-    gerunds = "|".join(
-        re.escape(g) for g in sorted(_VERB_TO_GERUND.values(), key=len, reverse=True)
-    )
-    joined = re.sub(
-        rf"^({gerunds})(?:,\s*[A-Za-z]+)*,\s+and\s+[A-Za-z]+\s+",
-        r"\1 ",
-        joined,
-        count=1,
-        flags=re.I,
-    )
-    joined = re.sub(
-        rf"^({gerunds})\s+and\s+[A-Za-z]+\s+",
-        r"\1 ",
-        joined,
-        count=1,
-        flags=re.I,
-    )
-    # Keep the responsibility readable; drop trailing clauses that read as JD paste.
-    clipped = _clip_words(joined, 12)
-    return clipped[0].lower() + clipped[1:] if clipped else clipped
+def _role_theme(plan: CoverLetterPlan) -> str:
+    """Short natural theme for the role family — never a truncated JD paste."""
+    family = (plan.role_family or "software").replace("_", " ").strip()
+    themes = {
+        "cloud": "cloud and production systems work",
+        "backend": "backend and data-platform work",
+        "devops": "operations and reliability work",
+        "ml": "applied machine-learning work",
+        "csharp": "application engineering work",
+        "general": "software engineering work",
+    }
+    return themes.get(family, f"{family} engineering work")
 
 
 def _clip_words(text: str, limit: int = 22) -> str:
@@ -252,10 +225,30 @@ def _employer_label(story: StoryEvidence) -> str:
 
 
 def _metric_clause(story: StoryEvidence) -> str:
-    if not story.metric:
+    """Phrase a complete before/after metric; omit orphans."""
+    metric = (story.metric or "").strip()
+    if not metric:
         return ""
-    # Keep the verified figure; do not invent what the number measured.
-    return f" A recorded outcome from that work was {story.metric}."
+    # Expected form from the planner: "from 3.5 hours to 1 hour"
+    pair = re.match(
+        r"from\s+(?P<before>.+?)\s+to\s+(?P<after>.+)$",
+        metric,
+        re.I,
+    )
+    if not pair:
+        return ""
+    before = pair.group("before").strip()
+    after = pair.group("after").strip()
+    # Only attach when the narrated bullet also carries both ends.
+    focus = " ".join((story.source_bullets or [""])[0].split()).lower()
+    for bullet in story.source_bullets:
+        cleaned = " ".join(bullet.split()).lower()
+        if len(cleaned) >= 24:
+            focus = cleaned
+            break
+    if before.lower() not in focus or after.lower().split()[0] not in focus:
+        return ""
+    return f", cutting runtime from {before} to {after}"
 
 
 def _story_paragraph(
@@ -267,36 +260,32 @@ def _story_paragraph(
     clause = _bullet_clause(story)
     where = _employer_label(story)
     metric = _metric_clause(story)
-    ask = _natural_responsibility(story, plan)
     role = plan.role
     company = plan.company
+    theme = _role_theme(plan)
+    # Accomplishment first; relevance in plain language. No gap arguing in prose.
     if story.connection == "weak":
+        lead = f"Earlier on {where}" if story.kind == "project" else f"Earlier as {where}"
         return (
-            f"The closest verified example is {where}, where I {clause}.{metric} "
-            f"It only partially covers {ask} for {company}, so I would keep that "
-            f"claim bounded in an interview rather than stretch it. The value is "
-            f"the concrete systems I can describe, not a stronger ownership claim."
+            f"{lead}, I {clause}{metric}. "
+            f"That hands-on operational work complements the {theme} I would bring "
+            f"to {company}."
         )
     if pattern % 3 == 0:
         return (
-            f"As {where}, I {clause}.{metric} "
-            f"That experience is useful for {role} work at {company} because it "
-            f"already involved production systems adjacent to {ask}. I can walk "
-            f"through those systems and tradeoffs in an interview without claiming "
-            f"tools or outcomes outside the record."
+            f"As {where}, I {clause}{metric}. "
+            f"That production systems experience is what I would bring to the "
+            f"{role} role at {company}."
         )
     if pattern % 3 == 1:
         return (
-            f"One concrete example is {where}, where I {clause}.{metric} "
-            f"For {company}, that matters for {ask}: the same production habits "
-            f"are what I can discuss with specifics rather than a restated resume "
-            f"line. I stay with what that role actually covered."
+            f"At {where}, I {clause}{metric}. "
+            f"I would apply those same systems habits to {theme} at {company}."
         )
     return (
-        f"Relevant experience comes from {where}: I {clause}.{metric} "
-        f"I would bring that same operating approach to {ask} in the {role} role "
-        f"at {company}, staying inside what both the posting and my record support "
-        f"and leaving room to discuss the boundaries of that experience."
+        f"In my work as {where}, I {clause}{metric}. "
+        f"I want to apply that same practical approach to the {role} role at "
+        f"{company}."
     )
 
 
@@ -305,18 +294,15 @@ def _company_sentence(plan: CoverLetterPlan) -> str:
     if not usable:
         return ""
     item = usable[0]
-    excerpt = " ".join(item.excerpt.split()[:14])
+    excerpt = " ".join(item.excerpt.split()[:12])
     excerpt = re.sub(r"https?://\S+|www\.\S+", "", excerpt).strip().rstrip(".,;")
     if not excerpt:
         return ""
-    return (
-        f" Official {plan.company} material describes {excerpt}, which is the "
-        f"company context used here—not a claim about personal motivation."
-    )
+    return f" {plan.company}'s public materials describe {excerpt}."
 
 
 def _opening(plan: CoverLetterPlan) -> str:
-    ask = _natural_responsibility(plan.primary, plan)
+    theme = _role_theme(plan)
     voice = plan.voice if plan.voice in {
         "technical_direct",
         "product_oriented",
@@ -329,28 +315,28 @@ def _opening(plan: CoverLetterPlan) -> str:
     company_bit = _company_sentence(plan)
     if voice == "product_oriented":
         angle = (
-            f"The product-facing need I can address is {ask}. "
-            f"I answer that with verified work below, not with generic praise."
+            f"I focus on shipping reliable product-facing systems, and I am "
+            f"interested in doing that through {theme} at {plan.company}."
         )
     elif voice == "startup_fast_paced":
         angle = (
-            f"The ownership need I can speak to is {ask}. "
-            f"That is the part of my background I can discuss with specifics."
+            f"I move quickly on ownership problems in {theme}, and I want to "
+            f"do that at {plan.company}."
         )
     elif voice == "large_company_professional":
         angle = (
-            f"The operating need I lead with is {ask}. "
-            f"The examples below stay inside verified evidence for that work."
+            f"I bring steady production habits from {theme} and would like to "
+            f"apply them at {plan.company}."
         )
     elif voice == "mission_oriented":
         angle = (
-            f"Where official material supports it, I can connect verified "
-            f"experience to {ask}."
+            f"I am drawn to {plan.company}'s work and can contribute through "
+            f"{theme}."
         )
     else:
         angle = (
-            f"A core need in the role is {ask}. "
-            f"Below I connect verified work to that responsibility."
+            f"My background is in {theme}, and I want to contribute that "
+            f"experience at {plan.company}."
         )
     return (
         f"I am applying for the {plan.role} position at {plan.company}. "
@@ -359,20 +345,10 @@ def _opening(plan: CoverLetterPlan) -> str:
 
 
 def _closing(plan: CoverLetterPlan, *, used_secondary: bool) -> str:
-    if used_secondary and plan.secondary:
-        return (
-            f"Taken together, those examples stay inside verified work. "
-            f"I would welcome a conversation about how that background applies at "
-            f"{plan.company}."
-        )
-    primary = plan.primary
-    where = _employer_label(primary) if primary else "that work"
-    ask = _natural_responsibility(primary, plan)
+    del used_secondary  # Closing stays applicant-facing either way.
     return (
-        f"I would bring the same approach from {where} to {ask} in the "
-        f"{plan.role} role at {plan.company}, without stretching into tools I "
-        f"have not used. I am available to discuss the boundaries of that "
-        f"experience."
+        f"I would welcome a conversation about joining {plan.company} as a "
+        f"{plan.role}."
     )
 
 
@@ -496,6 +472,22 @@ def prose_problems(
     )
     if overlap:
         problems.append("Letter repeats a resume bullet verbatim")
+    # Reject pasted JD fragments (truncated requirement lines).
+    for story in (plan.primary, plan.secondary):
+        if not story or not story.jd_responsibility:
+            continue
+        frag = " ".join(story.jd_responsibility.split()[:8]).lower()
+        if len(frag) >= 36 and frag in lower:
+            problems.append("Letter pastes a job-description requirement fragment")
+            break
+    # Orphan metrics: a lone duration/percent without a from→to relationship.
+    for match in re.finditer(
+        r"\b\d+(?:\.\d+)?\s*(?:hours?|percent|%)\b", body, re.I
+    ):
+        window = body[max(0, match.start() - 40) : match.end() + 40].lower()
+        if "from" not in window or "to" not in window:
+            problems.append(f"Orphan metric without before/after context: {match.group(0)}")
+            break
     for number in _NUMBER_RE.findall(body):
         if number not in allowed_numbers:
             problems.append(f"Unsupported number in letter: {number}")

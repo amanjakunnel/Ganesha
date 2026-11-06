@@ -12,7 +12,7 @@ OUTPUT_BASENAME = "Alex_Michael_Manjakunnel_Cover"
 CANDIDATE_NAME = "Alex Michael Manjakunnel"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CACHE_DIR = REPO_ROOT / "data" / "cover_letter_cache"
-PROMPT_VERSION = "cover-letter-v3"
+PROMPT_VERSION = "cover-letter-v4"
 
 VOICE_MODES = (
     "technical_direct",

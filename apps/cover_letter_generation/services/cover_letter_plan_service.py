@@ -29,7 +29,13 @@ from apps.resume_generation.services.structured_document_service import (
 )
 from packages.core.domain.models import JobPosting, ResumeGeneration
 
-_METRIC_RE = re.compile(r"\b\d+(?:\.\d+)?\s*(?:%|percent|hours?)\b", re.I)
+# Require a before→after relationship in the *same* bullet. Orphan figures
+# (e.g. "3.5 hours" alone) must not become letter claims.
+_METRIC_PAIR_RE = re.compile(
+    r"from\s+(?:roughly\s+|about\s+|~)?(?P<before>\d+(?:\.\d+)?\s*(?:hours?|%|percent))"
+    r"\s+to\s+(?:under\s+|about\s+|roughly\s+|~)?(?P<after>\d+(?:\.\d+)?\s*(?:hours?|%|percent))",
+    re.I,
+)
 
 
 def _normalize_voice(voice: str | None) -> str:
@@ -39,12 +45,30 @@ def _normalize_voice(voice: str | None) -> str:
     return chosen
 
 
-def _metric(bullets: list[str]) -> str | None:
+def _primary_bullet(bullets: list[str]) -> str | None:
+    """Bullet used for narration — first substantial line."""
     for bullet in bullets:
-        match = _METRIC_RE.search(bullet)
-        if match:
-            return match.group(0)
-    return None
+        cleaned = " ".join(bullet.split()).strip()
+        if len(cleaned) >= 24:
+            return cleaned
+    return " ".join(bullets[0].split()).strip() if bullets else None
+
+
+def _complete_metric_from_bullet(bullet: str | None) -> str | None:
+    """Return a before/after metric only when the selected bullet states both ends."""
+    if not bullet:
+        return None
+    match = _METRIC_PAIR_RE.search(bullet)
+    if not match:
+        return None
+    before = " ".join(match.group("before").split())
+    after = " ".join(match.group("after").split())
+    return f"from {before} to {after}"
+
+
+def _metric_for_story(bullets: list[str]) -> str | None:
+    """Attach a metric only to the narrated bullet — never a sibling accomplishment."""
+    return _complete_metric_from_bullet(_primary_bullet(bullets))
 
 
 _TERM_STOP = {
@@ -281,7 +305,7 @@ def _from_experience(
         fact_ids=[bullet.fact_id for bullet in entry.bullets],
         source_bullets=bullets,
         overlap_terms=terms,
-        metric=_metric(bullets),
+        metric=_metric_for_story(bullets),
     )
 
 
@@ -301,7 +325,7 @@ def _from_project(
         fact_ids=[bullet.fact_id for bullet in entry.bullets],
         source_bullets=bullets,
         overlap_terms=_terms(blob, keywords, description) or [entry.name],
-        metric=_metric(bullets),
+        metric=_metric_for_story(bullets),
     )
 
 

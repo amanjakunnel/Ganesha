@@ -531,9 +531,147 @@ def _candidate_years_claimed(blob: str) -> int | None:
     return max(values) if values else None
 
 
+_LANG_TOKEN = r"(?:scala|java|python|kotlin|typescript|javascript|golang|rust|go\b|c\+\+|csharp|c#)"
+
+
+def _compound_requirement_override(
+    requirement: str, candidate_blob: str, candidate_skills: set[str]
+) -> RequirementEvidence | None:
+    """Handle AND/OR compounds that keyword scoring would over-credit.
+
+    Returns a RequirementEvidence when a specialized rule applies; otherwise None
+    so the general matcher can run.
+    """
+    low = requirement.lower()
+    blob = candidate_blob.lower()
+
+    # "Scala or Java, with … functional programming"
+    lang_or = re.search(
+        rf"\b({_LANG_TOKEN})\s+or\s+({_LANG_TOKEN})\b",
+        requirement,
+        re.I,
+    )
+    wants_fp = bool(
+        re.search(r"functional programming|fp concepts|applying functional", low)
+    )
+    if lang_or and wants_fp:
+        options = {lang_or.group(1).lower().rstrip("."), lang_or.group(2).lower().rstrip(".")}
+        # Normalize go/golang, c#
+        normalized = set()
+        for opt in options:
+            if opt in {"go", "golang"}:
+                normalized.update({"go", "golang"})
+            elif opt in {"c#", "csharp"}:
+                normalized.update({"c#", "csharp"})
+            else:
+                normalized.add(opt)
+        lang_hit = any(
+            opt in candidate_skills or _whole_word_in_blob(opt, blob) for opt in normalized
+        )
+        fp_hit = bool(
+            re.search(
+                r"\b(functional programming|fp\b|immutab|monad|map[-\s]?reduce|"
+                r"higher[-\s]?order|lambda|stream api|collections\.stream)\b",
+                blob,
+                re.I,
+            )
+        ) or ("scala" in candidate_skills or _whole_word_in_blob("scala", blob))
+        if lang_hit and fp_hit:
+            return RequirementEvidence(
+                requirement=requirement[:180],
+                classification="required",
+                evidence_status=STATUS_DEMONSTRATED,
+                importance="high",
+                explanation=(
+                    "Language option and functional-programming evidence both present."
+                ),
+            )
+        if lang_hit:
+            shown = sorted(
+                opt for opt in normalized if opt in candidate_skills or _whole_word_in_blob(opt, blob)
+            )[:2]
+            return RequirementEvidence(
+                requirement=requirement[:180],
+                classification="required",
+                evidence_status=STATUS_ADJACENT,
+                importance="high",
+                explanation=(
+                    f"Language match ({', '.join(shown) or 'present'}), but "
+                    "functional-programming concepts are not demonstrated."
+                ),
+            )
+        return RequirementEvidence(
+            requirement=requirement[:180],
+            classification="required",
+            evidence_status=STATUS_NOT_DEMONSTRATED,
+            importance="high",
+            explanation="Neither listed language nor functional programming is demonstrated.",
+        )
+
+    # Ownership of schemas / SQL objects: skill tag alone is not ownership.
+    # Require schema/SQL-object language — not merely the word "database"
+    # (e.g. "production database" in a data-flow responsibility).
+    if re.search(r"\b(own|ownership|implement(?:ation)? of)\b", low) and re.search(
+        r"\b(schema|schemas|sql objects?|relational schema)\b", low
+    ):
+        sql_hit = "sql" in candidate_skills or _whole_word_in_blob("sql", blob)
+        ownership_hit = bool(
+            re.search(
+                r"\b(schema design|designed (?:\w+\s+){0,4}schema|"
+                r"database schema|sql (?:object|migration|ddl)|"
+                r"owned (?:\w+\s+){0,4}(?:schema|database)|"
+                r"relational (?:schema|model)|migrat(?:e|ion)s?\b)",
+                blob,
+                re.I,
+            )
+        )
+        if sql_hit and ownership_hit:
+            return RequirementEvidence(
+                requirement=requirement[:180],
+                classification="required",
+                evidence_status=STATUS_DEMONSTRATED,
+                importance="high",
+                explanation="Schema/SQL ownership evidence is present alongside SQL skill.",
+            )
+        if sql_hit:
+            return RequirementEvidence(
+                requirement=requirement[:180],
+                classification="required",
+                evidence_status=STATUS_ADJACENT,
+                importance="high",
+                explanation=(
+                    "SQL familiarity is present; schema ownership / design is not "
+                    "clearly demonstrated."
+                ),
+            )
+        if ownership_hit:
+            return RequirementEvidence(
+                requirement=requirement[:180],
+                classification="required",
+                evidence_status=STATUS_ADJACENT,
+                importance="high",
+                explanation="Schema work is suggested, but SQL skill is not in inventory.",
+            )
+        return RequirementEvidence(
+            requirement=requirement[:180],
+            classification="required",
+            evidence_status=STATUS_NOT_DEMONSTRATED,
+            importance="high",
+            explanation="Neither SQL skill nor schema ownership evidence is present.",
+        )
+
+    return None
+
+
 def _match_requirement(
     requirement: str, candidate_blob: str, candidate_skills: set[str]
 ) -> RequirementEvidence:
+    compound = _compound_requirement_override(
+        requirement, candidate_blob, candidate_skills
+    )
+    if compound is not None:
+        return compound
+
     tokens = []
     for raw in re.findall(r"[a-zA-Z][a-zA-Z0-9+.#-]{2,}", requirement):
         # Trailing '.' from sentence ends must not create distinct tokens
