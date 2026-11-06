@@ -180,6 +180,43 @@ def test_band_boundaries() -> None:
     )
 
 
+def test_location_line_does_not_inflate_to_perfect_score() -> None:
+    facts = [
+        _fact(
+            "M.S. Computer Science at Penn State University, State College.",
+            skills=["python"],
+        ),
+        _fact(
+            "Built Python backend APIs and Kafka consumers on AWS.",
+            skills=["python", "aws", "kafka", "api"],
+        ),
+    ]
+    job = _job(
+        "Software Developer III",
+        "\n".join(
+            [
+                "We are open to hiring candidates to work from our global headquarters "
+                "in State College, PA, USA, or remotely.",
+                "Key Responsibilities",
+                "Lead the design and development of complex backend software processors.",
+                "Own end-to-end backend data flows and monitoring for real-time systems.",
+                "Demonstrate skill across relational databases, cloud technologies, and mentoring.",
+                "Preferred qualifications",
+                "Experience with NestJS",
+            ]
+        )
+        + (" Real-time weather data platforms. " * 15),
+    )
+    result = assess_evidence_fit(job, facts)
+    locationish = [
+        r
+        for r in result.requirements
+        if "state college" in r.requirement.lower() or "remotely" in r.requirement.lower()
+    ]
+    assert locationish == []
+    assert result.score < 100 or len(result.requirements) >= 2
+
+
 def test_preferred_gap_does_not_force_low_fit() -> None:
     facts = [
         _fact(

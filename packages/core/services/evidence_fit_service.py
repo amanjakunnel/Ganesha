@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from packages.core.domain.models import JobPosting, ResumeFact, hash_text
 from packages.core.settings import settings
 
-FIT_POLICY_VERSION = "evidence-fit-v1"
+FIT_POLICY_VERSION = "evidence-fit-v2"
 
 BAND_RECOMMENDED = "recommended"
 BAND_STRETCH = "stretch"
@@ -164,18 +164,107 @@ class EvidenceFitAssessment:
         return payload
 
 
+_LOCATION_NOISE = frozenset(
+    {
+        "state",
+        "college",
+        "university",
+        "campus",
+        "location",
+        "remote",
+        "hybrid",
+        "onsite",
+        "office",
+        "headquarters",
+        "hq",
+        "united",
+        "states",
+        "usa",
+        "pennsylvania",
+        "park",
+        "city",
+        "open",
+        "hiring",
+        "candidates",
+        "work",
+        "from",
+        "our",
+        "global",
+        "or",
+        "remotely",
+    }
+)
+
+_MATCH_STOP = frozenset(
+    {
+        "and",
+        "the",
+        "with",
+        "for",
+        "you",
+        "will",
+        "our",
+        "this",
+        "that",
+        "from",
+        "have",
+        "are",
+        "ability",
+        "experience",
+        "strong",
+        "using",
+        "years",
+        "work",
+        "team",
+        *_LOCATION_NOISE,
+    }
+)
+
+_LOCATION_LINE = re.compile(
+    r"(?:"
+    r"\b(remote|hybrid|on[- ]?site|work from home|wfh)\b|"
+    r"\b(headquarters|hq|campus|office)\b|"
+    r"\b(united states|u\.s\.a?\.?|usa)\b|"
+    r"\b[A-Z][a-z]+(?: [A-Z][a-z]+)*,\s*[A-Z]{2}\b|"
+    r"\bwe are open to hiring\b|"
+    r"\b(located in|based in|office in)\b"
+    r")",
+    re.I,
+)
+
+
 def _candidate_blob(facts: list[ResumeFact]) -> tuple[str, set[str], str]:
     parts: list[str] = []
     ids: list[str] = []
     skills: set[str] = set()
+    # Only trusted skill tags become matchable skills — not every word in a fact.
+    try:
+        from apps.resume_generation.services.resume_corpus_service import SKILL_TOKENS
+    except Exception:  # pragma: no cover - keep fit usable if import fails
+        SKILL_TOKENS = ()  # type: ignore[misc, assignment]
+    known = {tok.lower() for tok in SKILL_TOKENS} | {
+        "api",
+        "backend",
+        "cloud",
+        "kubernetes",
+        "docker",
+        "terraform",
+        "ansible",
+        "kafka",
+        "jenkins",
+        "pytorch",
+        "react",
+        "node",
+    }
     for fact in facts:
         parts.append(fact.source_text or "")
         ids.append(fact.id)
         for skill in fact.skills_json or []:
             skills.add(skill.lower())
         for token in re.findall(r"[a-zA-Z][a-zA-Z0-9+.#-]{1,}", fact.source_text or ""):
-            if len(token) >= 3:
-                skills.add(token.lower())
+            low = token.lower()
+            if low in known:
+                skills.add(low)
     blob = "\n".join(parts).lower()
     digest = hashlib.sha256("|".join(sorted(ids)).encode()).hexdigest()[:24]
     return blob, skills, digest
@@ -189,14 +278,43 @@ _HEADING_ONLY = re.compile(
 )
 
 
+def _is_location_or_office_line(line: str) -> bool:
+    lower = line.lower().strip()
+    if _LOCATION_LINE.search(line) and not re.search(
+        r"\b(python|java|aws|api|kubernetes|docker|sql|backend|frontend|"
+        r"react|terraform|kafka|ci/?cd|microservice)\b",
+        lower,
+    ):
+        return True
+    # Short place-only lines: "State College, PA" / "Remote"
+    tokens = re.findall(r"[a-zA-Z]+", lower)
+    if tokens and all(t in _LOCATION_NOISE or len(t) <= 2 for t in tokens):
+        return True
+    return False
+
+
+def _split_long_text(text: str) -> list[str]:
+    """Break long JD paragraphs into sentence-sized requirement candidates."""
+    chunks: list[str] = []
+    for raw in (text or "").splitlines():
+        line = raw.strip().lstrip("•-*–— ").strip()
+        if not line:
+            continue
+        if len(line) <= 220:
+            chunks.append(line)
+            continue
+        for sent in re.split(r"(?<=[.!;])\s+", line):
+            cleaned = sent.strip().lstrip("•-*–— ").strip()
+            if cleaned:
+                chunks.append(cleaned)
+    return chunks
+
+
 def _extract_requirement_lines(description: str) -> list[tuple[str, str]]:
     """Return (line, classification) pairs from the posting text."""
     lines: list[tuple[str, str]] = []
     preferred_section = False
-    for raw in (description or "").splitlines():
-        line = raw.strip().lstrip("•-*–— ").strip()
-        if not line:
-            continue
+    for line in _split_long_text(description):
         lower = line.lower()
         if any(
             heading in lower
@@ -223,9 +341,26 @@ def _extract_requirement_lines(description: str) -> list[tuple[str, str]]:
             continue
         if _HEADING_ONLY.match(lower) and len(line) < 40:
             continue
-        if len(line) < 3 or len(line) > 220:
+        if _is_location_or_office_line(line):
+            continue
+        if len(line) < 12 or len(line) > 220:
             continue
         if not re.search(r"[a-zA-Z]", line):
+            continue
+        # Skip soft culture / preference blurbs that are not qualifications.
+        if re.search(
+            r"\b(someone who likes|passion for|deep interest|best of breed|"
+            r"want to be part|we are looking for a)\b",
+            lower,
+        ):
+            continue
+        # Prefer lines that look like responsibilities/skills, not marketing blurbs.
+        if not re.search(
+            r"\b(experience|build|design|develop|own|lead|python|java|aws|"
+            r"cloud|api|sql|docker|kubernetes|backend|frontend|data|"
+            r"software|engineer|required|responsib|mentor|sql|schema)\b",
+            lower,
+        ):
             continue
         classification = "preferred" if preferred_section else "required"
         if "preferred" in lower or "nice to have" in lower:
@@ -242,33 +377,15 @@ def _match_requirement(
     tokens = [
         t.lower()
         for t in re.findall(r"[a-zA-Z][a-zA-Z0-9+.#-]{2,}", requirement)
-        if t.lower() not in {
-            "and",
-            "the",
-            "with",
-            "for",
-            "you",
-            "will",
-            "our",
-            "this",
-            "that",
-            "from",
-            "have",
-            "are",
-            "ability",
-            "experience",
-            "strong",
-            "using",
-            "years",
-            "work",
-            "team",
-        }
+        if t.lower() not in _MATCH_STOP
     ]
     hits = [t for t in tokens if t in candidate_blob or t in candidate_skills]
-    meaningful = [t for t in hits if t not in GENERIC_SKILLS]
-    if meaningful:
+    meaningful = [t for t in hits if t not in GENERIC_SKILLS and t not in _LOCATION_NOISE]
+    # Require at least two meaningful overlaps, or one known tech skill hit.
+    tech_hits = [t for t in meaningful if t in candidate_skills or len(t) >= 4]
+    if len(meaningful) >= 2 or (len(meaningful) == 1 and meaningful[0] in candidate_skills):
         status = STATUS_DEMONSTRATED
-        explanation = f"Verified evidence overlaps on: {', '.join(meaningful[:4])}."
+        explanation = f"Verified evidence overlaps on: {', '.join(tech_hits[:4] or meaningful[:4])}."
     elif hits:
         status = STATUS_ADJACENT
         explanation = (

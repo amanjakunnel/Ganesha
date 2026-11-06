@@ -148,7 +148,13 @@ def _from_project(
 
 
 def _score(story: StoryEvidence) -> int:
-    return len(story.overlap_terms) * 10 + (5 if story.metric else 0)
+    base = len(story.overlap_terms) * 10 + (5 if story.metric else 0)
+    # Prefer verified employment over projects when overlap is otherwise similar.
+    if story.kind == "experience":
+        base += 4
+    if story.metric:
+        base += 2
+    return base
 
 
 def select_stories(

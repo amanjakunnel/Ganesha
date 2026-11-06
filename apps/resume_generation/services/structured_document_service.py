@@ -225,22 +225,32 @@ def _build_experience_entries(
         )
         chosen: list[BulletRef] = []
         chosen_texts: list[str] = []
-        for b in scored_bullets:
-            if b.normalized_text in used_bullet_norms:
-                continue
-            if _is_near_duplicate(
-                b.normalized_text, chosen_texts + list(used_bullet_norms)
-            ):
-                continue
-            used_bullet_norms.add(b.normalized_text)
-            chosen_texts.append(b.normalized_text)
-            chosen.append(
-                BulletRef(
-                    text=b.source_text, fact_id=b.id, normalized=b.normalized_text
-                )
-            )
+        chosen_openings: list[str] = []
+        for prefer_unique_opening in (True, False):
             if len(chosen) >= bullets_per_role:
                 break
+            for b in scored_bullets:
+                if len(chosen) >= bullets_per_role:
+                    break
+                if b.normalized_text in used_bullet_norms:
+                    continue
+                if any(c.fact_id == b.id for c in chosen):
+                    continue
+                if _is_near_duplicate(
+                    b.normalized_text, chosen_texts + list(used_bullet_norms)
+                ):
+                    continue
+                opening = (b.source_text.split() or [""])[0].lower()
+                if prefer_unique_opening and opening in chosen_openings:
+                    continue
+                used_bullet_norms.add(b.normalized_text)
+                chosen_texts.append(b.normalized_text)
+                chosen_openings.append(opening)
+                chosen.append(
+                    BulletRef(
+                        text=b.source_text, fact_id=b.id, normalized=b.normalized_text
+                    )
+                )
         if not chosen:
             continue
         # Prefer distinct company vs title; if identical, try to split "Title at Company"

@@ -34,5 +34,5 @@ The header does not include a target role or company. The company appears in the
 ## Length
 
 - Preferred body length: 250–325 words
-- Accepted body length: 225–375 words
+- Accepted body length: 160–350 words (prefer ~250–325 when evidence supports it; do not pad)
 - Exactly one page after PDF conversion

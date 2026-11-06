@@ -44,3 +44,5 @@ data/cover_letter_cache/
 
 # Accidental nested project copy
 job-application-agent/
+data/word_conversion_workspace/
+data/generated_resumes/_word_conversion/

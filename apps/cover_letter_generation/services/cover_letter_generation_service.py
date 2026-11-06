@@ -17,6 +17,7 @@ from apps.cover_letter_generation.services.cover_letter_composer_service import 
     allowed_numbers,
     compose_deterministic,
     prose_problems,
+    style_warnings,
     try_model_prose,
 )
 from apps.cover_letter_generation.services.cover_letter_docx_render_service import (
@@ -120,6 +121,7 @@ def generate_cover_letter_for_job(
                 "Deterministic letter used. Model prose was unavailable or rejected."
             )
         document = compose_deterministic(plan)
+    warnings.extend(style_warnings(document))
     problems = prose_problems(document, plan, allowed_numbers=numbers)
     if problems:
         return CoverGenerationResult(

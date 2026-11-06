@@ -12,6 +12,10 @@ from apps.resume_generation.services.structured_document_service import (
     build_resume_document,
     validate_document_structure,
 )
+from apps.resume_generation.services.writing_quality_service import (
+    resume_hard_writing_problems,
+    resume_style_warnings,
+)
 from packages.core.domain.models import JobPosting, ResumeSourceDocument
 from packages.core.settings import settings
 
@@ -61,7 +65,9 @@ def build_resume_strategy(
     gpa_warn = gpa_conflict_warning(session)
     if gpa_warn:
         warnings.append(gpa_warn)
-    structure_errors = validate_document_structure(document)
+    warnings.extend(resume_style_warnings(document))
+    writing_errors = resume_hard_writing_problems(document)
+    structure_errors = validate_document_structure(document) + writing_errors
     if structure_errors:
         return ResumeStrategy(
             track=track,

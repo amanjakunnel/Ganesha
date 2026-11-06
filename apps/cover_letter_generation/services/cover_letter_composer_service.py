@@ -22,6 +22,7 @@ from apps.cover_letter_generation.schemas import (
 )
 from packages.core.settings import settings
 
+# Hard blockers: fluff or house boilerplate that replaces substance.
 _GENERIC = (
     "i am excited to apply",
     "this aligns perfectly",
@@ -29,6 +30,15 @@ _GENERIC = (
     "perfect fit",
     "passionate about innovation",
     "to whom it may concern",
+    "concrete fit",
+    "the verified work involved",
+    "the strongest related example is",
+    "a complementary example is",
+    "i am not treating other tools",
+    "i have always been passionate",
+    "cutting-edge",
+    "seamless",
+    "leverage my passion",
 )
 _FORBIDDEN = re.compile(
     r"\b(work authorization|f-1|opt|stem opt|sponsorship|citizenship|visa|"
@@ -36,24 +46,25 @@ _FORBIDDEN = re.compile(
     re.I,
 )
 _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
+_INFLATED = re.compile(
+    r"\b(spearheaded|architected|revolutionized|disrupted|synerg(?:y|ized))\b",
+    re.I,
+)
 
-_VOICE_LINE = {
-    "technical_direct": "The technical requirement I am responding to is {focus}.",
-    "product_oriented": (
-        "The product outcome I am responding to is reliable {focus} for the people "
-        "who depend on it."
-    ),
-    "mission_oriented": (
-        "Where official material supports it, the {focus} work is the part of "
-        "{company} I can connect to verified experience."
-    ),
-    "startup_fast_paced": (
-        "The ownership this role describes is end-to-end work on {focus}."
-    ),
-    "large_company_professional": (
-        "The operating bar this role describes is disciplined delivery of {focus}."
-    ),
-}
+# Soft style signals — warn, do not block release.
+_STYLE_WARN = (
+    "leverage",
+    "cutting-edge",
+    "seamless",
+    "robust",
+    "innovative",
+    "impactful",
+    "fast-paced environment",
+)
+
+# Prefer shorter concrete letters over padded filler (documented migration from 225).
+MIN_WORDS = 160
+MAX_WORDS = 350
 
 
 def word_count(text: str) -> int:
@@ -63,7 +74,7 @@ def word_count(text: str) -> int:
 def _phrase(terms: list[str]) -> str:
     cleaned = [term for term in terms if term]
     if not cleaned:
-        return "the posted requirements"
+        return "the posted technical requirements"
     if len(cleaned) == 1:
         return cleaned[0]
     if len(cleaned) == 2:
@@ -80,46 +91,182 @@ def _focus(plan: CoverLetterPlan) -> str:
     return _phrase(terms)
 
 
-def _story_sentence(story: StoryEvidence, *, role: str, company: str, lead: str) -> str:
+def _clip_words(text: str, limit: int = 22) -> str:
+    words = text.split()
+    if len(words) <= limit:
+        return text
+    chunk = " ".join(words[:limit]).rstrip(",;:")
+    # Prefer ending on a natural boundary so we do not leave "and"/"across" dangling.
+    for sep in (", ", "; ", " and ", " with ", " through ", " across "):
+        idx = chunk.rfind(sep)
+        if idx >= 40:
+            return chunk[:idx].rstrip(",;:")
+    # Drop a trailing dangling conjunction/preposition.
+    while chunk.split() and chunk.split()[-1].lower() in {
+        "and",
+        "or",
+        "with",
+        "to",
+        "for",
+        "of",
+        "on",
+        "in",
+        "across",
+        "through",
+        "including",
+    }:
+        chunk = " ".join(chunk.split()[:-1])
+    return chunk.rstrip(",;:")
+
+
+def _bullet_clause(story: StoryEvidence) -> str:
+    """Turn a verified bullet into a first-person clause without inventing detail.
+
+    Uses a shortened verified fragment so the letter explains relevance instead of
+    pasting the resume bullet verbatim.
+    """
     terms = _phrase(story.overlap_terms[:3]) if story.overlap_terms else story.label
-    metric = ""
-    if story.metric:
-        metric = f" A verified figure from that work is {story.metric}."
-    subject = (
-        f"the {story.label} project"
-        if story.kind == "project"
-        else f"my work as {story.title} at {story.employer}"
-    )
+    raw = ""
+    source = ""
+    for bullet in story.source_bullets:
+        cleaned = " ".join(bullet.split()).strip().rstrip(".")
+        if len(cleaned) >= 24:
+            raw = cleaned
+            source = cleaned
+            break
+    if not raw and story.source_bullets:
+        raw = " ".join(story.source_bullets[0].split()).strip().rstrip(".")
+        source = raw
+    if not raw:
+        return f"worked on {terms}"
+    # Prefer the action clause as written; only reframe the leading verb for grammar.
+    if raw[0].isupper() and raw.split()[0].lower() not in {"i", "my", "our"}:
+        raw = raw[0].lower() + raw[1:]
+    words = raw.split()
+    # Short bullets would otherwise paste verbatim; keep the technical gist only.
+    if len(source) < 55 or len(words) <= 10:
+        return f"handled {terms} work day to day in that role"
+    # Longer bullets: keep a partial action fragment, not the full resume line.
+    return _clip_words(raw, 14)
+
+
+def _employer_label(story: StoryEvidence) -> str:
+    if story.kind == "project":
+        return f"the {story.label} project"
+    return f"{story.title} at {story.employer}"
+
+
+def _metric_clause(story: StoryEvidence) -> str:
+    if not story.metric:
+        return ""
+    return f" One verified result from that work is {story.metric}."
+
+
+def _story_paragraph(
+    story: StoryEvidence, *, role: str, company: str, pattern: int
+) -> str:
+    clause = _bullet_clause(story)
+    where = _employer_label(story)
+    metric = _metric_clause(story)
+    focus = _phrase(story.overlap_terms[:3]) if story.overlap_terms else "this work"
+    if pattern % 3 == 0:
+        return (
+            f"As {where}, I {clause}.{metric} "
+            f"That experience is useful for the {role} role at {company} because "
+            f"the posting emphasizes {focus}. In an interview I can walk through "
+            f"the systems, tradeoffs, and scope of that work without stretching "
+            f"into tools I have not used."
+        )
+    if pattern % 3 == 1:
+        return (
+            f"One concrete example is {where}, where I {clause}.{metric} "
+            f"For {company}, the connection is the shared need for {focus} rather "
+            f"than a generic skills list. The detail I would discuss is how that "
+            f"work was operated and maintained, not a restatement of my resume."
+        )
     return (
-        f"{lead} {subject}. The verified work involved {terms}.{metric} "
-        f"That is relevant to the {role} role at {company} because the posting "
-        f"asks for those capabilities, and I am not treating other tools in the "
-        f"description as experience I already have."
+        f"Relevant experience comes from {where}: I {clause}.{metric} "
+        f"I would apply the same approach to the {role} responsibilities at "
+        f"{company}, staying inside what that posting and my record both support "
+        f"and keeping the discussion on {focus}."
     )
 
 
 def _company_sentence(plan: CoverLetterPlan) -> str:
     usable = [item for item in plan.company_evidence if item.usable]
     if not usable:
-        return (
-            f"This letter uses the {plan.role} description and verified experience "
-            f"only."
-        )
+        return ""
     item = usable[0]
-    excerpt = " ".join(item.excerpt.split()[:12])
-    excerpt = re.sub(r"https?://\S+|www\.\S+", "", excerpt).strip()
+    excerpt = " ".join(item.excerpt.split()[:14])
+    excerpt = re.sub(r"https?://\S+|www\.\S+", "", excerpt).strip().rstrip(".,;")
+    if not excerpt:
+        return ""
     return (
-        f"An official {item.source_type.replace('_', ' ')} page for {plan.company} "
-        f"is the company context used here: {excerpt}."
+        f" Official {plan.company} material describes {excerpt}, which is the "
+        f"company context used here—not a claim about personal motivation."
     )
 
 
-def _voice_sentence(plan: CoverLetterPlan) -> str:
-    voice = plan.voice if plan.voice in _VOICE_LINE else DEFAULT_VOICE
+def _opening(plan: CoverLetterPlan) -> str:
+    focus = _focus(plan)
+    voice = plan.voice if plan.voice in {
+        "technical_direct",
+        "product_oriented",
+        "mission_oriented",
+        "startup_fast_paced",
+        "large_company_professional",
+    } else DEFAULT_VOICE
     if voice == "mission_oriented" and not plan.company_evidence:
         voice = "technical_direct"
-    template = _VOICE_LINE[voice]
-    return template.format(focus=_focus(plan), company=plan.company)
+    company_bit = _company_sentence(plan)
+    if voice == "product_oriented":
+        angle = (
+            f"The posting centers on reliable {focus} for people who depend on "
+            f"the product, which matches work I have already shipped."
+        )
+    elif voice == "startup_fast_paced":
+        angle = (
+            f"The role asks for end-to-end ownership around {focus}, which is "
+            f"the part of my background I can discuss with specifics."
+        )
+    elif voice == "large_company_professional":
+        angle = (
+            f"The bar described is careful delivery of {focus}, and that is the "
+            f"evidence I lead with below."
+        )
+    elif voice == "mission_oriented":
+        angle = (
+            f"Where official material supports it, the {focus} work is the "
+            f"connection I can make from verified experience."
+        )
+    else:
+        angle = (
+            f"I am writing about the {focus} work in the posting, using examples "
+            f"I can defend with the record below."
+        )
+    return (
+        f"I am applying for the {plan.role} position at {plan.company}. "
+        f"{angle}{company_bit}"
+    )
+
+
+def _closing(plan: CoverLetterPlan, *, used_secondary: bool) -> str:
+    focus = _focus(plan)
+    if used_secondary and plan.secondary:
+        return (
+            f"Taken together, those examples cover the {focus} work the "
+            f"{plan.role} posting describes at a level I can defend with specifics. "
+            f"I would welcome a conversation about how that background applies at "
+            f"{plan.company}."
+        )
+    primary = plan.primary
+    where = _employer_label(primary) if primary else "that work"
+    return (
+        f"I would bring the same approach from {where} to the {plan.role} work at "
+        f"{plan.company}, staying with {focus} rather than stretching into tools "
+        f"I have not used. I am available to discuss the implementation details "
+        f"and the boundaries of that experience."
+    )
 
 
 def compose_deterministic(plan: CoverLetterPlan, *, today: datetime | None = None) -> CoverLetterDocument:
@@ -128,38 +275,25 @@ def compose_deterministic(plan: CoverLetterPlan, *, today: datetime | None = Non
     stamp = today or datetime.now()
     date_line = f"{stamp:%B} {stamp.day}, {stamp:%Y}"
     salutation = f"Dear {plan.company} Hiring Team,"
-    focus = _focus(plan)
-    paragraph_1 = (
-        f"I am applying for the {plan.role} position at {plan.company}. "
-        f"{_voice_sentence(plan)} "
-        f"The description's emphasis on {focus} matches work I have already done, "
-        f"which is the reason this role is a concrete fit. {_company_sentence(plan)}"
-    )
-    paragraph_2 = _story_sentence(
-        plan.primary,
-        role=plan.role,
-        company=plan.company,
-        lead="The strongest related example is",
+    seed = int(hashlib.sha1(plan.primary.label.encode()).hexdigest()[:8], 16)
+    paragraph_1 = _opening(plan)
+    paragraph_2 = _story_paragraph(
+        plan.primary, role=plan.role, company=plan.company, pattern=seed
     )
     if plan.secondary:
-        paragraph_3 = _story_sentence(
+        paragraph_3 = _story_paragraph(
             plan.secondary,
             role=plan.role,
             company=plan.company,
-            lead="A complementary example is",
+            pattern=seed + 1,
         )
-        paragraph_3 += (
-            f" Together, those two examples are the scope of what I would bring "
-            f"to {plan.company}."
+        # Keep three paragraphs: fold a short close into paragraph 3.
+        paragraph_3 = (
+            f"{paragraph_3} {_closing(plan, used_secondary=True)}"
         )
     else:
-        paragraph_3 = (
-            f"The same {plan.primary.label} evidence is the contribution I would "
-            f"bring to {plan.company}: experience with {focus}, applied carefully "
-            f"to the {plan.role} work described in the posting. "
-            f"I would welcome a conversation about that fit."
-        )
-    paragraphs = _fit_length([paragraph_1, paragraph_2, paragraph_3], plan)
+        paragraph_3 = _closing(plan, used_secondary=False)
+    paragraphs = [paragraph_1, paragraph_2, paragraph_3]
     fact_ids = list(plan.primary.fact_ids)
     if plan.secondary:
         fact_ids.extend(plan.secondary.fact_ids)
@@ -177,30 +311,6 @@ def compose_deterministic(plan: CoverLetterPlan, *, today: datetime | None = Non
     )
 
 
-def _fit_length(paragraphs: list[str], plan: CoverLetterPlan) -> list[str]:
-    """Add explanation from already selected terms until the letter is concise."""
-    focus = _focus(plan)
-    extras = [
-        (
-            f"I would use that {focus} experience to contribute quickly to the "
-            f"{plan.role} work at {plan.company}, and only where the posting and "
-            f"the verified role use the same terms."
-        ),
-        (
-            f"The letter stays with those examples so the claim is limited to "
-            f"verified work at "
-            f"{plan.primary.employer if plan.primary else plan.company}."
-        ),
-        "I would welcome a short conversation about how that evidence applies.",
-    ]
-    updated = list(paragraphs)
-    extra_index = 0
-    while word_count(" ".join(updated)) < 250 and extra_index < len(extras):
-        updated[2] = updated[2].rstrip() + " " + extras[extra_index]
-        extra_index += 1
-    return updated
-
-
 def resume_bullet_overlap(paragraphs: list[str], bullets: list[str]) -> list[str]:
     text = " ".join(paragraphs).lower()
     hits: list[str] = []
@@ -209,6 +319,44 @@ def resume_bullet_overlap(paragraphs: list[str], bullets: list[str]) -> list[str
         if len(cleaned) >= 40 and cleaned.lower() in text:
             hits.append(cleaned)
     return hits
+
+
+def style_warnings(document: CoverLetterDocument) -> list[str]:
+    """Non-blocking writing signals for diagnostics."""
+    warnings: list[str] = []
+    body = "\n".join(document.paragraphs)
+    lower = body.lower()
+    for phrase in _STYLE_WARN:
+        if phrase in lower:
+            warnings.append(f"Style caution: '{phrase}'")
+    openings = [p.split()[:4] for p in document.paragraphs if p.split()]
+    if len(openings) >= 2:
+        heads = [" ".join(o).lower() for o in openings]
+        if len(set(heads)) < len(heads):
+            warnings.append("Style caution: repeated paragraph openings")
+    norms = [" ".join(p.lower().split()) for p in document.paragraphs]
+    for i, left in enumerate(norms):
+        for right in norms[i + 1 :]:
+            shared = set(left.split()) & set(right.split())
+            if len(shared) >= 22:
+                warnings.append("Style caution: paragraphs share substantial wording")
+                break
+    if _INFLATED.search(body):
+        warnings.append("Style caution: inflated ownership verb")
+    # Unexplained skill dumps: long comma lists with no action verbs nearby.
+    for paragraph in document.paragraphs:
+        if paragraph.count(",") >= 6 and not re.search(
+            r"\b(built|designed|owned|implemented|deployed|debugged|wrote|"
+            r"maintained|collaborated|handled|applying|writing)\b",
+            paragraph,
+            re.I,
+        ):
+            warnings.append("Style caution: unexplained skill list")
+            break
+    count = word_count(body)
+    if count > 325:
+        warnings.append(f"Style caution: letter is long ({count} words)")
+    return warnings
 
 
 def prose_problems(
@@ -242,10 +390,26 @@ def prose_problems(
         if number not in allowed_numbers:
             problems.append(f"Unsupported number in letter: {number}")
     count = word_count(body)
-    if count < 225 or count > 375:
-        problems.append(f"Word count {count} is outside 225-375")
+    if count < MIN_WORDS or count > MAX_WORDS:
+        problems.append(f"Word count {count} is outside {MIN_WORDS}-{MAX_WORDS}")
     if len(document.paragraphs) != 3:
         problems.append("Letter must contain three paragraphs")
+    # Exact or near-exact duplicate paragraphs are factual/structural failures.
+    norms = [" ".join(p.lower().split()) for p in document.paragraphs]
+    for i, left in enumerate(norms):
+        for right in norms[i + 1 :]:
+            if not left or not right:
+                continue
+            if left == right:
+                problems.append("Duplicate paragraphs")
+                break
+            left_words = left.split()
+            right_words = right.split()
+            shared = set(left_words) & set(right_words)
+            denom = max(len(left_words), len(right_words), 1)
+            if len(shared) / denom >= 0.85 and denom >= 25:
+                problems.append("Near-duplicate paragraphs")
+                break
     return problems
 
 
@@ -359,8 +523,10 @@ def try_model_prose(
         "task": (
             "Write three cover-letter paragraphs as JSON keys paragraph_1, "
             "paragraph_2, paragraph_3, factual_claim_ids, company_fact_ids, warnings. "
-            "Use only the provided facts. Do not invent metrics, employers, or "
-            "company claims."
+            "Use only the provided facts. Do not invent metrics, employers, "
+            "motivations, or company claims. Prefer plain specific wording over "
+            "generic praise. Explain why the selected work matters for this role; "
+            "do not paste resume bullets. About 180-325 words total."
         ),
         "voice": plan.voice,
         "role": plan.role,
