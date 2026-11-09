@@ -265,6 +265,7 @@
     const statusMessage = document.getElementById("status-message");
     const resumeBtn = document.getElementById("btn-generate-resume");
     const coverBtn = document.getElementById("btn-generate-cover");
+    const prepareBtn = document.getElementById("btn-prepare-application");
     const coverPlanBtn = document.getElementById("btn-view-cover-plan");
     const coverVoice = document.getElementById("cover-voice");
     const confirmPanel = document.getElementById("confirm-panel");
@@ -281,10 +282,20 @@
     const fitWarning = document.getElementById("fit-generation-warning");
     const fitBreakdownPanel = document.getElementById("fit-breakdown-panel");
     const fitBreakdownBody = document.getElementById("fit-breakdown-body");
+    const applicationPanel = document.getElementById("application-panel");
+    const applicationBody = document.getElementById("application-body");
+    const applicationActions = document.getElementById("application-actions");
+    const btnAppOpen = document.getElementById("btn-app-open");
+    const btnAppReveal = document.getElementById("btn-app-reveal");
+    const btnAppSubmitted = document.getElementById("btn-app-submitted");
+    const btnAppNeeds = document.getElementById("btn-app-needs");
+    const btnAppCancel = document.getElementById("btn-app-cancel");
 
     let pendingAction = null;
     let detailData = null;
     let inFlight = false;
+    let activeAttemptId = null;
+    let preparePreviewData = null;
 
     function setStatus(kind, html) {
       if (!html) {
@@ -306,7 +317,54 @@
       inFlight = busy;
       if (resumeBtn) resumeBtn.disabled = busy || !(detailData && detailData.resume_generation && detailData.resume_generation.available);
       if (coverBtn) coverBtn.disabled = busy || !(detailData && detailData.cover_letter_generation && detailData.cover_letter_generation.available);
+      if (prepareBtn) prepareBtn.disabled = busy;
       if (confirmGenerate) confirmGenerate.disabled = busy;
+    }
+
+    function formatUnresolved(item) {
+      if (!item || typeof item !== "object") return String(item || "");
+      if (item.kind === "sensitive_question_category") {
+        return `Answer manually on employer form: ${item.category || "sensitive question"}`;
+      }
+      if (item.kind === "final_submission") {
+        return "Final submission stays manual — Ganesha never clicks Submit.";
+      }
+      if (item.action) return String(item.action);
+      return JSON.stringify(item);
+    }
+
+    function renderAttempt(attempt) {
+      if (!applicationPanel || !applicationBody) return;
+      activeAttemptId = attempt.attempt_id;
+      applicationPanel.hidden = false;
+      const terminal = ["cancelled", "submitted_user_confirmed", "failed"].includes(
+        attempt.status
+      );
+      if (applicationActions) applicationActions.hidden = terminal;
+      const resume = (attempt.package && attempt.package.resume) || {};
+      const cover = (attempt.package && attempt.package.cover_letter) || null;
+      const unresolved = (attempt.unresolved || [])
+        .slice(0, 8)
+        .map((item) => `<li>${escapeHtml(formatUnresolved(item))}</li>`)
+        .join("");
+      applicationBody.innerHTML = `
+        <ul class="result-list">
+          <li><strong>${escapeHtml(attempt.company || "")}</strong> — ${escapeHtml(attempt.role || "")}</li>
+          <li>Status: <strong>${escapeHtml(attempt.status || "")}</strong></li>
+          <li>Mode: Chrome + Simplify assisted handoff (not automatic Ganesha autofill)</li>
+          <li>Application URL: <code>${escapeHtml(attempt.application_url || "")}</code></li>
+          <li>Resume: <code>${escapeHtml(resume.pdf_path || resume.docx_path || "missing")}</code>
+            ${resume.validation_ok ? "(validated)" : ""}</li>
+          <li>Cover letter: ${
+            attempt.include_cover_letter && cover
+              ? `<code>${escapeHtml(cover.pdf_path || cover.docx_path || "")}</code>`
+              : "optional — not included"
+          }</li>
+          <li>Simplify: user-invoked in your Chrome profile; Ganesha cannot observe completion.</li>
+        </ul>
+        <p class="muted">Sensitive employer questions require your explicit answers on the form.</p>
+        ${unresolved ? `<ul class="result-list">${unresolved}</ul>` : ""}
+      `;
     }
 
     function renderFit(fit) {
@@ -467,18 +525,110 @@
       if (inFlight || coverBtn.disabled) return;
       openCoverConfirm();
     });
+
+    async function openPrepareConfirm() {
+      pendingAction = "prepare";
+      confirmTitle.textContent = "Prepare application";
+      confirmGenerate.disabled = true;
+      confirmList.innerHTML = "<li>Loading preparation preview…</li>";
+      confirmPanel.hidden = false;
+      resultPanel.hidden = true;
+      try {
+        const response = await fetch(
+          `/api/jobs/${encodeURIComponent(jobId)}/application/prepare-preview`
+        );
+        const data = await response.json();
+        preparePreviewData = data;
+        if (!response.ok) {
+          confirmList.innerHTML = `<li>${escapeHtml(data.error || "Preview failed")}</li>`;
+          return;
+        }
+        const items = [
+          `<strong>${escapeHtml(data.company || "")}</strong> — ${escapeHtml(data.role || "")}`,
+          `Destination: <code>${escapeHtml(data.application_url || "missing")}</code>`,
+          `Resume: ${
+            data.resume
+              ? `<code>${escapeHtml(data.resume.pdf_path || data.resume.docx_path || "")}</code> (reuse)`
+              : "<span class='warn-text'>Generate a job-specific resume first</span>"
+          }`,
+          `Cover letter: optional${
+            data.cover_letter
+              ? ` — available stamp ${escapeHtml(data.cover_letter.stamp || "")}`
+              : " — none on file"
+          }`,
+          `Mode: Chrome + Simplify assisted handoff (Ganesha does not control Simplify)`,
+        ];
+        if (data.fit_warning) {
+          items.push(`<span class="warn-text">Fit warning: ${escapeHtml(data.fit_warning)}</span>`);
+        }
+        if (data.block_reason) {
+          items.push(`<span class="warn-text">${escapeHtml(data.block_reason)}</span>`);
+        }
+        if ((data.active_attempts || []).length) {
+          items.push(
+            `<span class="warn-text">Active attempt exists (${escapeHtml(
+              data.active_attempts[0].attempt_id
+            )}). Confirming will force a new attempt.</span>`
+          );
+        }
+        (data.simplify_limits || []).slice(0, 3).forEach((line) => {
+          items.push(escapeHtml(line));
+        });
+        confirmList.innerHTML = items.map((i) => `<li>${i}</li>`).join("");
+        confirmList.innerHTML += `
+          <li><label><input type="checkbox" id="prep-include-cover"> Include optional cover letter</label></li>
+          <li><label><input type="checkbox" id="prep-ack-fit" ${
+            data.fit_warning ? "" : "checked"
+          }> Acknowledge fit warning / proceed</label></li>
+        `;
+        confirmGenerate.disabled = !data.can_prepare;
+        confirmGenerate.textContent = "Prepare";
+      } catch (_err) {
+        confirmList.innerHTML = "<li>Could not load application preview.</li>";
+      }
+    }
+
+    if (prepareBtn) {
+      prepareBtn.addEventListener("click", () => {
+        if (inFlight) return;
+        openPrepareConfirm();
+      });
+    }
+
     cancelGenerate.addEventListener("click", () => {
       confirmPanel.hidden = true;
       pendingAction = null;
+      confirmGenerate.textContent = "Generate";
     });
 
     confirmGenerate.addEventListener("click", async () => {
       if (!pendingAction || inFlight) return;
       setBusy(true);
-      setStatus("empty", pendingAction === "resume" ? "Generating tailored resume…" : "Generating tailored cover letter…");
+      if (pendingAction === "prepare") {
+        setStatus("empty", "Preparing application package…");
+      } else {
+        setStatus("empty", pendingAction === "resume" ? "Generating tailored resume…" : "Generating tailored cover letter…");
+      }
       try {
         let response;
-        if (pendingAction === "resume") {
+        if (pendingAction === "prepare") {
+          const includeCover = !!(document.getElementById("prep-include-cover") || {}).checked;
+          const ackFit = !!(document.getElementById("prep-ack-fit") || {}).checked;
+          const forceNew = !!(preparePreviewData && (preparePreviewData.active_attempts || []).length);
+          response = await fetch(
+            `/api/jobs/${encodeURIComponent(jobId)}/application/prepare`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                confirm: true,
+                include_cover_letter: includeCover,
+                acknowledge_fit_warning: ackFit || !(preparePreviewData && preparePreviewData.fit_warning),
+                force_new: forceNew,
+              }),
+            }
+          );
+        } else if (pendingAction === "resume") {
           response = await fetch(
             `/api/jobs/${encodeURIComponent(jobId)}/resume/generate`,
             {
@@ -506,49 +656,137 @@
         }
         const data = await response.json();
         confirmPanel.hidden = true;
-        resultPanel.hidden = false;
-        if (data.status === "succeeded") {
-          setStatus(
-            "empty",
-            pendingAction === "resume"
-              ? "Resume generated successfully."
-              : "Cover letter generated"
-          );
-          if (pendingAction === "resume") {
-            resultBody.innerHTML = `
-              <ul class="result-list">
-                <li>DOCX generated</li>
-                <li>One-page PDF generated</li>
-                <li>Internal DOCX: <code>${escapeHtml(data.docx_path || "")}</code></li>
-                <li>Internal PDF: <code>${escapeHtml(data.pdf_path || "")}</code></li>
-                <li>Desktop PDF: <code>${escapeHtml(data.desktop_pdf_path || "")}</code></li>
-                <li>Track: ${escapeHtml(data.track || "")}</li>
-              </ul>
-            `;
+        confirmGenerate.textContent = "Generate";
+        if (pendingAction === "prepare") {
+          if (data.status === "prepared" && data.attempt) {
+            setStatus("empty", "Application package prepared.");
+            renderAttempt(data.attempt);
           } else {
-            resultBody.innerHTML = `
-              <ul class="result-list">
-                <li>Cover letter generated</li>
-                <li>Voice: ${escapeHtml(data.voice || "")}</li>
-                <li>Selected evidence: ${escapeHtml(String(data.evidence_count || 0))}</li>
-                <li>Company evidence used: ${data.company_evidence_used ? "yes" : "no"}</li>
-                <li>Internal DOCX: <code>${escapeHtml(data.docx_path || "")}</code></li>
-                <li>Internal PDF: <code>${escapeHtml(data.pdf_path || "")}</code></li>
-                <li>Desktop PDF: <code>${escapeHtml(data.desktop_pdf_path || "")}</code></li>
-              </ul>
-            `;
+            setStatus("error", escapeHtml(data.error || "Preparation failed."));
+            if (applicationPanel) {
+              applicationPanel.hidden = false;
+              applicationBody.innerHTML = `<p>${escapeHtml(data.error || "Preparation failed.")}</p>`;
+            }
           }
         } else {
-          setStatus("error", escapeHtml(data.error || "Generation failed."));
-          resultBody.innerHTML = `<p>${escapeHtml(data.error || "Generation failed.")}</p>`;
+          resultPanel.hidden = false;
+          if (data.status === "succeeded") {
+            setStatus(
+              "empty",
+              pendingAction === "resume"
+                ? "Resume generated successfully."
+                : "Cover letter generated"
+            );
+            if (pendingAction === "resume") {
+              resultBody.innerHTML = `
+                <ul class="result-list">
+                  <li>DOCX generated</li>
+                  <li>One-page PDF generated</li>
+                  <li>Internal DOCX: <code>${escapeHtml(data.docx_path || "")}</code></li>
+                  <li>Internal PDF: <code>${escapeHtml(data.pdf_path || "")}</code></li>
+                  <li>Desktop PDF: <code>${escapeHtml(data.desktop_pdf_path || "")}</code></li>
+                  <li>Track: ${escapeHtml(data.track || "")}</li>
+                </ul>
+              `;
+            } else {
+              resultBody.innerHTML = `
+                <ul class="result-list">
+                  <li>Cover letter generated</li>
+                  <li>Voice: ${escapeHtml(data.voice || "")}</li>
+                  <li>Selected evidence: ${escapeHtml(String(data.evidence_count || 0))}</li>
+                  <li>Company evidence used: ${data.company_evidence_used ? "yes" : "no"}</li>
+                  <li>Internal DOCX: <code>${escapeHtml(data.docx_path || "")}</code></li>
+                  <li>Internal PDF: <code>${escapeHtml(data.pdf_path || "")}</code></li>
+                  <li>Desktop PDF: <code>${escapeHtml(data.desktop_pdf_path || "")}</code></li>
+                </ul>
+              `;
+            }
+          } else {
+            setStatus("error", escapeHtml(data.error || "Generation failed."));
+            resultBody.innerHTML = `<p>${escapeHtml(data.error || "Generation failed.")}</p>`;
+          }
         }
       } catch (_err) {
-        setStatus("error", "Generation request failed.");
+        setStatus("error", "Request failed.");
       } finally {
         pendingAction = null;
         setBusy(false);
       }
     });
+
+    async function attemptAction(path, successMessage) {
+      if (!activeAttemptId || inFlight) return;
+      setBusy(true);
+      try {
+        const response = await fetch(
+          `/api/application-attempts/${encodeURIComponent(activeAttemptId)}${path}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ confirm: true }),
+          }
+        );
+        const data = await response.json();
+        if (!response.ok) {
+          setStatus("error", escapeHtml(data.error || "Action failed."));
+          return;
+        }
+        if (data.attempt) renderAttempt(data.attempt);
+        if (data.instructions) {
+          setStatus(
+            "empty",
+            escapeHtml(successMessage) +
+              " " +
+              escapeHtml((data.instructions || []).slice(0, 1).join(" "))
+          );
+        } else {
+          setStatus("empty", escapeHtml(successMessage));
+        }
+        if (data.simplify_handoff) {
+          setStatus(
+            "empty",
+            "Opened in Chrome. Invoke Simplify yourself if installed, review answers, then confirm submission here. Ganesha did not submit."
+          );
+        }
+      } catch (_err) {
+        setStatus("error", "Action request failed.");
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    if (btnAppOpen) {
+      btnAppOpen.addEventListener("click", () =>
+        attemptAction("/open", "Chrome handoff requested.")
+      );
+    }
+    if (btnAppReveal) {
+      btnAppReveal.addEventListener("click", () =>
+        attemptAction("/reveal-documents", "Revealed selected documents locally.")
+      );
+    }
+    if (btnAppSubmitted) {
+      btnAppSubmitted.addEventListener("click", () => {
+        if (
+          !window.confirm(
+            "Confirm only if you already submitted the employer form yourself. Ganesha never submits automatically."
+          )
+        ) {
+          return;
+        }
+        attemptAction("/mark-submitted", "Marked submitted (user-confirmed).");
+      });
+    }
+    if (btnAppNeeds) {
+      btnAppNeeds.addEventListener("click", () =>
+        attemptAction("/mark-needs-action", "Marked needs action.")
+      );
+    }
+    if (btnAppCancel) {
+      btnAppCancel.addEventListener("click", () =>
+        attemptAction("/cancel", "Attempt cancelled.")
+      );
+    }
 
     if (coverPlanBtn) {
       coverPlanBtn.addEventListener("click", async () => {

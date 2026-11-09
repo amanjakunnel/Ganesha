@@ -38,6 +38,7 @@ data/candidate_resume*/
 data/generated_resumes/
 data/resume_corpus/
 data/cover_letter_cache/
+data/application_attempts/
 
 # Python packaging metadata
 *.egg-info/

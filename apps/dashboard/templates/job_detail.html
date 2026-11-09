@@ -36,6 +36,9 @@
         <button type="button" class="btn primary" id="btn-generate-cover">
           Generate tailored cover letter
         </button>
+        <button type="button" class="btn primary" id="btn-prepare-application">
+          Prepare application
+        </button>
       </div>
       <details class="cover-options" id="cover-options">
         <summary>Cover letter options</summary>
@@ -54,6 +57,18 @@
         </button>
       </details>
       <p class="inline-warning" id="fit-generation-warning" hidden></p>
+    </section>
+
+    <section class="result-panel" id="application-panel" hidden>
+      <h2>Application preparation</h2>
+      <div id="application-body"></div>
+      <div class="confirm-actions" id="application-actions" hidden>
+        <button type="button" class="btn primary" id="btn-app-open">Open application in Chrome</button>
+        <button type="button" class="btn" id="btn-app-reveal">Access selected documents</button>
+        <button type="button" class="btn" id="btn-app-submitted">Mark submitted</button>
+        <button type="button" class="btn" id="btn-app-needs">Mark needs action</button>
+        <button type="button" class="btn" id="btn-app-cancel">Cancel attempt</button>
+      </div>
     </section>
 
     <section class="confirm-panel" id="confirm-panel" hidden>
@@ -94,6 +109,6 @@
       page: "job_detail"
     };
   </script>
-  <script src="/static/dashboard.js?v=fit1"></script>
+  <script src="/static/dashboard.js?v=apply2"></script>
 </body>
 </html>

@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -402,6 +403,63 @@ class ResumeFact(Base):
         Index("ix_resume_facts_source", "source_document_id"),
         Index("ix_resume_facts_parent_key", "parent_key"),
     )
+
+
+class ApplicationAttempt(Base):
+    """One assisted-application preparation/execution attempt for a job.
+
+    Separate from JobApplication (one lifecycle row per job). Attempts may be
+    prepared, opened, cancelled, or user-confirmed submitted without inferring
+    submission from browser navigation alone.
+    """
+
+    __tablename__ = "application_attempts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=make_uuid)
+    job_posting_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("job_postings.id"), index=True
+    )
+    job_application_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("job_applications.id"), nullable=True
+    )
+    company_name: Mapped[str] = mapped_column(String(255))
+    role_title: Mapped[str] = mapped_column(String(512))
+    posting_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    application_url: Mapped[str] = mapped_column(String(1024))
+    resume_generation_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("resume_generations.id"), nullable=True
+    )
+    cover_letter_stamp: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cover_letter_optional: Mapped[bool] = mapped_column(Boolean, default=True)
+    include_cover_letter: Mapped[bool] = mapped_column(Boolean, default=False)
+    execution_mode: Mapped[str] = mapped_column(
+        String(64), default="chrome_simplify_handoff"
+    )
+    status: Mapped[str] = mapped_column(String(64), default="prepared")
+    profile_data_ref: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    package_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    unresolved_json: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    safe_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prepared_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    opened_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    submitted_user_confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    cancelled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    job: Mapped[JobPosting] = relationship("JobPosting")
 
 
 class ResumeGeneration(Base):
