@@ -313,6 +313,42 @@ def reassess_fit_cmd(
         session.close()
 
 
+@jobs_app.command(name="reassess-eligibility")
+def reassess_eligibility_cmd(
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Preview eligibility counts without writing"
+    ),
+    limit: int | None = typer.Option(
+        None, "--limit", help="Limit jobs reassessed (testing)"
+    ),
+) -> None:
+    """Recompute eligibility for stored jobs (preserves applications and artifacts)."""
+    from packages.core.services.job_eligibility import reassess_eligibility
+
+    session: Session = SessionLocal()
+    try:
+        result = reassess_eligibility(session, dry_run=dry_run, limit=limit)
+        if not dry_run:
+            session.commit()
+        typer.echo(
+            "Eligibility reassessment: "
+            f"scanned={result['scanned']}, dry_run={result['dry_run']}, "
+            f"policy={result['policy_version']}, changed={result['changed']}, "
+            f"stale_policy={result['stale_policy']}"
+        )
+        typer.echo("Results:")
+        for key, count in (result.get("result_counts") or {}).items():
+            typer.echo(f"  {key}: {count}")
+        typer.echo("Exclusion / review reasons:")
+        reasons = result.get("reason_counts") or {}
+        if not reasons:
+            typer.echo("  (none)")
+        for key, count in reasons.items():
+            typer.echo(f"  {key}: {count}")
+    finally:
+        session.close()
+
+
 @jobs_app.command(name="queue")
 def queue_cmd(
     limit: int = 20,
