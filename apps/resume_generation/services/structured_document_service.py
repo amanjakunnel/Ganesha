@@ -263,13 +263,19 @@ def _build_experience_entries(
                 display_title, display_company = left.strip(), right.strip()
             else:
                 continue
+        from apps.resume_generation.services.experience_layout import (
+            split_employer_location,
+        )
+
+        clean_company, location = split_employer_location(display_company)
         entries.append(
             ExperienceEntry(
-                company=display_company,
+                company=clean_company or display_company,
                 title=display_title,
                 dates=dates or "",
                 bullets=chosen,
                 parent_key=key,
+                location=location,
             )
         )
     entries.sort(key=_role_sort_key, reverse=True)

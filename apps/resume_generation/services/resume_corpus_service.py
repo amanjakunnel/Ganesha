@@ -283,7 +283,9 @@ def extract_facts_from_docx(path: Path, root: Path) -> list[ExtractedFact]:
             and len(raw) < 80
             and len(raw.split()) <= 8
         ):
-            pending_org = raw.replace("\t", " ").strip()
+            # Preserve tab-derived gaps as multi-spaces so employer/location can split
+            # cleanly; never rely on visual space padding in the renderer.
+            pending_org = re.sub(r"[ \t]*\t[ \t]*", "  ", raw).strip()
             continue
 
         if section in {"experience", "projects", "education"} and _looks_like_header(

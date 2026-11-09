@@ -6,7 +6,7 @@ from pathlib import Path
 
 from packages.core.settings import settings
 
-TEMPLATE_VERSION = "ganesha-ats-v1"
+TEMPLATE_VERSION = "ganesha-ats-v2-tab-layout"
 OUTPUT_BASENAME = "Alex_Michael_Manjakunnel_Resume"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GENERATED_ROOT = REPO_ROOT / "data" / "generated_resumes"
