@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     fit_stretch_min: int = 50
     # Default dashboard feed: recommended | recommended_stretch | needs_review | low_fit | all_eligible
     fit_default_feed: str = "recommended"
+    # Live referral contacts Google Sheet (link-view CSV export). Contents stay out of git.
+    referral_sheet_id: str = "1GWWHljxgghvhCtQRkIlV-hfC9RoKcgGgj5PDFR6NDVM"
+    referral_sheet_gid: str = "0"
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
