@@ -1,5 +1,7 @@
 # Environment, credentials, private data
 .env
+.env.*
+!.env.example
 credentials*
 token*.json
 *.pem
@@ -26,12 +28,17 @@ alembic/versions/__pycache__/
 # Tests
 .pytest_cache/
 .pytest_test_db.sqlite
+*.sqlite
+*.sqlite3
 
-# Local job-search inputs (keep private exports out of git)
-sheets/*.csv
-sheets/*.xlsx
-sheets/.DS_Store
-
+# Local job-search inputs and exports (keep private data out of git)
+sheets/*
+!sheets/.gitkeep
+*.csv
+!tests/**/*.csv
+Simplify_Tracked_Jobs*.csv
+Referral*.xlsx
+Referral*.csv
 
 # Do not commit any personal resume or candidate private docs
 data/candidate_resume*/
@@ -39,11 +46,22 @@ data/generated_resumes/
 data/resume_corpus/
 data/cover_letter_cache/
 data/application_attempts/
+data/browser_profiles/*
+!data/browser_profiles/.gitkeep
+data/import_archive/*
+!data/import_archive/.gitkeep
+data/referral_cache/*
+!data/referral_cache/.gitkeep
+data/word_conversion_workspace/
 
 # Python packaging metadata
 *.egg-info/
 
 # Accidental nested project copy
 job-application-agent/
-data/word_conversion_workspace/
 data/generated_resumes/_word_conversion/
+
+# OS noise
+.DS_Store
+**/.DS_Store
+
