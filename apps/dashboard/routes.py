@@ -344,6 +344,7 @@ class PrepareApplicationBody(BaseModel):
     include_cover_letter: bool = False
     force_new: bool = False
     acknowledge_fit_warning: bool = False
+    acknowledge_previous_application: bool = False
     confirm: bool = False
 
 
@@ -397,6 +398,7 @@ def api_application_prepare(
             include_cover_letter=body.include_cover_letter,
             force_new=body.force_new,
             acknowledge_fit_warning=body.acknowledge_fit_warning,
+            acknowledge_previous_application=body.acknowledge_previous_application,
         )
         session.commit()
         return JSONResponse(
@@ -485,6 +487,42 @@ def api_application_attempt_open(
         return JSONResponse({"error": "Confirmation required"}, status_code=400)
     try:
         payload = open_attempt_in_chrome(session, attempt_id)
+        session.commit()
+        return JSONResponse(payload)
+    except AttemptNotFoundError:
+        session.rollback()
+        return JSONResponse({"error": "Attempt not found"}, status_code=404)
+    except AttemptError as exc:
+        session.rollback()
+        return JSONResponse({"error": str(exc), "status": "error"}, status_code=400)
+    except Exception as exc:
+        session.rollback()
+        if is_database_unavailable(exc):
+            return JSONResponse({"error": DB_UNAVAILABLE_MESSAGE}, status_code=503)
+        raise
+
+
+@router.post("/api/application-attempts/{attempt_id}/fill-supported")
+def api_application_attempt_fill_supported(
+    attempt_id: str,
+    body: AttemptActionBody,
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    from apps.application_execution.services.attempt_service import (
+        AttemptError,
+        AttemptNotFoundError,
+        fill_attempt_controlled_browser,
+    )
+
+    if not body.confirm:
+        return JSONResponse({"error": "Confirmation required"}, status_code=400)
+    try:
+        payload = fill_attempt_controlled_browser(
+            session,
+            attempt_id,
+            headless=False,
+            keep_open=True,
+        )
         session.commit()
         return JSONResponse(payload)
     except AttemptNotFoundError:
