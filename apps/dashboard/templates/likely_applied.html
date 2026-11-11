@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Likely applied — Ganesha</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-text">
+      <h1>Likely applied, needs your confirmation</h1>
+      <p class="subtitle">Saved-only Simplify rows with evidence you may have applied. Nothing is promoted automatically.</p>
+    </div>
+    <p><a class="btn" href="/">← Jobs</a></p>
+  </header>
+  <main>
+    <p id="summary" class="muted">Loading…</p>
+    <div class="filter-actions" style="margin-bottom:1rem">
+      <button type="button" class="btn primary" id="bulk-confirm">Confirm selected</button>
+      <button type="button" class="btn" id="bulk-reject">Reject selected</button>
+      <button type="button" class="btn" id="gmail-preview">Gmail preview (readonly)</button>
+    </div>
+    <p id="gmail-status" class="muted" hidden></p>
+    <div class="table-wrap">
+      <table class="jobs-table">
+        <thead>
+          <tr>
+            <th scope="col"><input type="checkbox" id="select-all" aria-label="Select all"></th>
+            <th scope="col">Company</th>
+            <th scope="col">Role</th>
+            <th scope="col">Evidence</th>
+            <th scope="col">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </main>
+  <script>
+    function escapeHtml(v) {
+      return String(v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    }
+    async function load() {
+      const res = await fetch("/api/likely-applied");
+      const data = await res.json();
+      const summary = document.getElementById("summary");
+      summary.textContent = `${data.count || 0} candidates · ${data.low_confidence || 0} low confidence · Gmail ready: ${data.gmail_ready ? "yes" : "no (setup required)"}`;
+      const tbody = document.getElementById("rows");
+      tbody.innerHTML = "";
+      for (const item of data.items || []) {
+        const tr = document.createElement("tr");
+        const evidence = (item.evidence || []).map(e =>
+          `<div><strong>${escapeHtml(e.kind)}</strong>: ${escapeHtml(e.detail)}</div>`
+        ).join("");
+        const low = item.low_confidence ? ' <span class="new-badge">low confidence</span>' : "";
+        tr.innerHTML = `
+          <td><input type="checkbox" class="row-check" value="${escapeHtml(item.record_id)}"></td>
+          <td>${escapeHtml(item.company)}${low}</td>
+          <td>${escapeHtml(item.role)}</td>
+          <td>${evidence || "—"}</td>
+          <td>
+            <button type="button" class="btn primary act-confirm" data-id="${escapeHtml(item.record_id)}">Confirm</button>
+            <button type="button" class="btn act-reject" data-id="${escapeHtml(item.record_id)}">Reject</button>
+          </td>`;
+        tbody.appendChild(tr);
+      }
+      tbody.querySelectorAll(".act-confirm").forEach(btn => btn.addEventListener("click", () => act("confirm", [btn.dataset.id])));
+      tbody.querySelectorAll(".act-reject").forEach(btn => btn.addEventListener("click", () => act("reject", [btn.dataset.id])));
+    }
+    async function act(action, ids) {
+      if (!ids.length) return;
+      await fetch("/api/likely-applied/action", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({action, record_ids: ids}),
+      });
+      await load();
+    }
+    function selectedIds() {
+      return [...document.querySelectorAll(".row-check:checked")].map(el => el.value);
+    }
+    document.getElementById("bulk-confirm").addEventListener("click", () => act("confirm", selectedIds()));
+    document.getElementById("bulk-reject").addEventListener("click", () => act("reject", selectedIds()));
+    document.getElementById("select-all").addEventListener("change", (e) => {
+      document.querySelectorAll(".row-check").forEach(el => { el.checked = e.target.checked; });
+    });
+    document.getElementById("gmail-preview").addEventListener("click", async () => {
+      const el = document.getElementById("gmail-status");
+      el.hidden = false;
+      el.textContent = "Running Gmail preview…";
+      const res = await fetch("/api/likely-applied/gmail-preview", {method: "POST"});
+      const data = await res.json();
+      if (data.setup_required) {
+        el.textContent = data.setup_message || "Gmail OAuth setup required.";
+        return;
+      }
+      el.textContent = `Scanned ${data.scanned}, matched ${data.matched}, low-confidence ${data.low_confidence}, unmatched ${data.unmatched_aggregate}. Nothing written. Use apply endpoint after review.`;
+    });
+    load();
+  </script>
+</body>
+</html>
