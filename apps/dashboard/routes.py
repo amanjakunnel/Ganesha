@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -903,10 +904,10 @@ def api_review_queue(session: Session = Depends(get_session)) -> JSONResponse:
         )
         items = []
         for row in rows:
-            unresolved = []
+            unresolved: list[Any] = []
             payload = row.package_json or {}
             if isinstance(payload, dict):
-                unresolved = (
+                unresolved = list(
                     (payload.get("controlled_autofill") or {}).get("unresolved")
                     or payload.get("unresolved")
                     or []

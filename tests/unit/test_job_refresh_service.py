@@ -16,7 +16,7 @@ from packages.core.services.simplifyjobs_sync import (
 
 
 @pytest.fixture(autouse=True)
-def _reset_state() -> None:
+def _reset_state():
     reset_refresh_state_for_tests()
     yield
     reset_refresh_state_for_tests()
@@ -94,11 +94,11 @@ def test_mark_missing_closed_counts() -> None:
         session.commit()
         assert closed >= 1
         session.refresh(gone)
-        assert gone.intake_metadata["simplify_markers"]["listing_closed"] is True
+        gone_meta = gone.intake_metadata or {}
+        assert (gone_meta.get("simplify_markers") or {}).get("listing_closed") is True
         session.refresh(kept)
-        assert not (kept.intake_metadata.get("simplify_markers") or {}).get(
-            "listing_closed"
-        )
+        kept_meta = kept.intake_metadata or {}
+        assert not (kept_meta.get("simplify_markers") or {}).get("listing_closed")
     finally:
         session.close()
         # Leave shared DB intact; unique keys avoid collisions with production data.
