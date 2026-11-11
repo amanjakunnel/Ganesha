@@ -9,6 +9,8 @@ data/private/
 data/answer_bank/
 # Answer bank / Gmail tokens live under ~/.ganesha/ (outside repo); keep local copies out too.
 **/answer_bank.json
+gmail/
+**/client_secret*.json
 
 # Python cache
 __pycache__/

@@ -5,98 +5,261 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Likely applied — Ganesha</title>
   <link rel="stylesheet" href="/static/dashboard.css">
+  <style>
+    .group-heading { margin: 1.25rem 0 0.5rem; font-size: 1.05rem; }
+    .evidence-block { font-size: 0.88rem; }
+    .evidence-block .match-basis { color: var(--muted); font-size: 0.8rem; }
+    .strength-strong { color: #1b5e20; font-weight: 600; }
+    .strength-weak { color: #8a5a00; }
+    .status-line { margin: 0.5rem 0; min-height: 1.2em; }
+    .err { color: var(--danger); }
+  </style>
 </head>
 <body>
   <header class="site-header">
     <div class="header-text">
       <h1>Likely applied, needs your confirmation</h1>
-      <p class="subtitle">Saved-only Simplify rows with evidence you may have applied. Nothing is promoted automatically.</p>
+      <p class="subtitle">Saved-only Simplify rows with evidence you may have applied. Nothing is promoted automatically. <a href="/">← Jobs</a></p>
     </div>
-    <p><a class="btn" href="/">← Jobs</a></p>
   </header>
   <main>
     <p id="summary" class="muted">Loading…</p>
-    <div class="filter-actions" style="margin-bottom:1rem">
+    <p id="rules" class="muted" style="font-size:0.85rem"></p>
+    <div class="filter-actions" style="margin-bottom:1rem; display:flex; gap:0.5rem; flex-wrap:wrap">
       <button type="button" class="btn primary" id="bulk-confirm">Confirm selected</button>
       <button type="button" class="btn" id="bulk-reject">Reject selected</button>
       <button type="button" class="btn" id="gmail-preview">Gmail preview (readonly)</button>
+      <button type="button" class="btn" id="gmail-apply" hidden>Persist Gmail evidence</button>
+      <button type="button" class="btn" id="reload">Reload</button>
     </div>
+    <p id="action-status" class="status-line" role="status"></p>
     <p id="gmail-status" class="muted" hidden></p>
+
+    <h2 class="group-heading">Strong evidence <span id="strong-count" class="muted"></span></h2>
+    <p class="muted" style="font-size:0.85rem">Matching APPLIED record (same canonical URL + company), notes phrases, or Gmail confirmation.</p>
     <div class="table-wrap">
-      <table class="jobs-table">
+      <table class="jobs-table" id="strong-table">
         <thead>
           <tr>
-            <th scope="col"><input type="checkbox" id="select-all" aria-label="Select all"></th>
+            <th scope="col"><input type="checkbox" id="select-strong" aria-label="Select strong"></th>
             <th scope="col">Company</th>
             <th scope="col">Role</th>
             <th scope="col">Evidence</th>
             <th scope="col">Actions</th>
           </tr>
         </thead>
-        <tbody id="rows"></tbody>
+        <tbody id="strong-rows"></tbody>
+      </table>
+    </div>
+
+    <h2 class="group-heading">Weak evidence only <span id="weak-count" class="muted"></span></h2>
+    <p class="muted" style="font-size:0.85rem">Applied Date alone, or weak URL collisions (generic portals / company mismatch). Not proof of applying.</p>
+    <div class="table-wrap">
+      <table class="jobs-table" id="weak-table">
+        <thead>
+          <tr>
+            <th scope="col"><input type="checkbox" id="select-weak" aria-label="Select weak"></th>
+            <th scope="col">Company</th>
+            <th scope="col">Role</th>
+            <th scope="col">Evidence</th>
+            <th scope="col">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="weak-rows"></tbody>
       </table>
     </div>
   </main>
   <script>
     function escapeHtml(v) {
-      return String(v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+      return String(v == null ? "" : v)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
     }
-    async function load() {
-      const res = await fetch("/api/likely-applied");
-      const data = await res.json();
-      const summary = document.getElementById("summary");
-      summary.textContent = `${data.count || 0} candidates · ${data.low_confidence || 0} low confidence · Gmail ready: ${data.gmail_ready ? "yes" : "no (setup required)"}`;
-      const tbody = document.getElementById("rows");
+
+    function setStatus(msg, isErr) {
+      const el = document.getElementById("action-status");
+      el.textContent = msg || "";
+      el.className = "status-line" + (isErr ? " err" : "");
+    }
+
+    function renderEvidence(item) {
+      return (item.evidence || [])
+        .map((e) => {
+          const strength = e.strength || "weak";
+          const basis = e.match_basis
+            ? `<div class="match-basis">match basis: ${escapeHtml(e.match_basis)}</div>`
+            : "";
+          return (
+            `<div class="evidence-block">` +
+            `<span class="strength-${escapeHtml(strength)}">${escapeHtml(strength)}</span> ` +
+            `<strong>${escapeHtml(e.kind)}</strong>: ${escapeHtml(e.detail)}` +
+            basis +
+            `</div>`
+          );
+        })
+        .join("");
+    }
+
+    function renderRows(tbody, items) {
       tbody.innerHTML = "";
-      for (const item of data.items || []) {
+      if (!items.length) {
         const tr = document.createElement("tr");
-        const evidence = (item.evidence || []).map(e =>
-          `<div><strong>${escapeHtml(e.kind)}</strong>: ${escapeHtml(e.detail)}</div>`
-        ).join("");
-        const low = item.low_confidence ? ' <span class="new-badge">low confidence</span>' : "";
+        tr.innerHTML = `<td colspan="5" class="muted">None</td>`;
+        tbody.appendChild(tr);
+        return;
+      }
+      for (const item of items) {
+        const tr = document.createElement("tr");
+        const low = item.low_confidence
+          ? ' <span class="new-badge">low confidence</span>'
+          : "";
         tr.innerHTML = `
           <td><input type="checkbox" class="row-check" value="${escapeHtml(item.record_id)}"></td>
           <td>${escapeHtml(item.company)}${low}</td>
           <td>${escapeHtml(item.role)}</td>
-          <td>${evidence || "—"}</td>
+          <td>${renderEvidence(item) || "—"}</td>
           <td>
             <button type="button" class="btn primary act-confirm" data-id="${escapeHtml(item.record_id)}">Confirm</button>
             <button type="button" class="btn act-reject" data-id="${escapeHtml(item.record_id)}">Reject</button>
           </td>`;
         tbody.appendChild(tr);
       }
-      tbody.querySelectorAll(".act-confirm").forEach(btn => btn.addEventListener("click", () => act("confirm", [btn.dataset.id])));
-      tbody.querySelectorAll(".act-reject").forEach(btn => btn.addEventListener("click", () => act("reject", [btn.dataset.id])));
+      tbody.querySelectorAll(".act-confirm").forEach((btn) =>
+        btn.addEventListener("click", () => act("confirm", [btn.dataset.id]))
+      );
+      tbody.querySelectorAll(".act-reject").forEach((btn) =>
+        btn.addEventListener("click", () => act("reject", [btn.dataset.id]))
+      );
     }
+
+    async function load() {
+      setStatus("Loading…");
+      try {
+        const res = await fetch("/api/likely-applied");
+        const data = await res.json();
+        if (!res.ok) {
+          setStatus(data.error || `Load failed (${res.status})`, true);
+          return;
+        }
+        document.getElementById("summary").textContent =
+          `${data.count || 0} candidates · strong ${data.strong_count || 0} · weak ${data.weak_count || 0} · ` +
+          `low confidence ${data.low_confidence || 0} · Gmail ready: ${data.gmail_ready ? "yes" : "no"}`;
+        document.getElementById("strong-count").textContent = `(${data.strong_count || 0})`;
+        document.getElementById("weak-count").textContent = `(${data.weak_count || 0})`;
+        const rules = data.evidence_rules || {};
+        document.getElementById("rules").textContent =
+          `Applied Date: ${rules.applied_date || ""} Matching APPLIED: ${rules.matching_applied_record || ""}`;
+        renderRows(document.getElementById("strong-rows"), data.strong || []);
+        renderRows(document.getElementById("weak-rows"), data.weak || []);
+        setStatus("");
+      } catch (err) {
+        setStatus("Load failed: " + (err && err.message ? err.message : err), true);
+      }
+    }
+
     async function act(action, ids) {
-      if (!ids.length) return;
-      await fetch("/api/likely-applied/action", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({action, record_ids: ids}),
-      });
-      await load();
-    }
-    function selectedIds() {
-      return [...document.querySelectorAll(".row-check:checked")].map(el => el.value);
-    }
-    document.getElementById("bulk-confirm").addEventListener("click", () => act("confirm", selectedIds()));
-    document.getElementById("bulk-reject").addEventListener("click", () => act("reject", selectedIds()));
-    document.getElementById("select-all").addEventListener("change", (e) => {
-      document.querySelectorAll(".row-check").forEach(el => { el.checked = e.target.checked; });
-    });
-    document.getElementById("gmail-preview").addEventListener("click", async () => {
-      const el = document.getElementById("gmail-status");
-      el.hidden = false;
-      el.textContent = "Running Gmail preview…";
-      const res = await fetch("/api/likely-applied/gmail-preview", {method: "POST"});
-      const data = await res.json();
-      if (data.setup_required) {
-        el.textContent = data.setup_message || "Gmail OAuth setup required.";
+      ids = (ids || []).filter(Boolean);
+      if (!ids.length) {
+        setStatus("Select at least one row.", true);
         return;
       }
-      el.textContent = `Scanned ${data.scanned}, matched ${data.matched}, low-confidence ${data.low_confidence}, unmatched ${data.unmatched_aggregate}. Nothing written. Use apply endpoint after review.`;
+      setStatus(`${action}ing ${ids.length}…`);
+      try {
+        const res = await fetch("/api/likely-applied/action", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, record_ids: ids }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setStatus(data.error || `Action failed (${res.status})`, true);
+          return;
+        }
+        setStatus(
+          action === "confirm"
+            ? `Confirmed ${data.confirmed || 0}.`
+            : `Rejected ${data.rejected || 0}.`
+        );
+        await load();
+      } catch (err) {
+        setStatus("Action failed: " + (err && err.message ? err.message : err), true);
+      }
+    }
+
+    function selectedIds() {
+      return [...document.querySelectorAll(".row-check:checked")].map((el) => el.value);
+    }
+
+    function wireSelect(masterId, scopeId) {
+      const master = document.getElementById(masterId);
+      master.addEventListener("change", () => {
+        document
+          .querySelectorAll(`#${scopeId} .row-check`)
+          .forEach((el) => {
+            el.checked = master.checked;
+          });
+      });
+    }
+
+    document.getElementById("bulk-confirm").addEventListener("click", () =>
+      act("confirm", selectedIds())
+    );
+    document.getElementById("bulk-reject").addEventListener("click", () =>
+      act("reject", selectedIds())
+    );
+    document.getElementById("reload").addEventListener("click", () => load());
+    wireSelect("select-strong", "strong-rows");
+    wireSelect("select-weak", "weak-rows");
+
+    let lastPreview = null;
+    document.getElementById("gmail-preview").addEventListener("click", async () => {
+      const el = document.getElementById("gmail-status");
+      const applyBtn = document.getElementById("gmail-apply");
+      el.hidden = false;
+      applyBtn.hidden = true;
+      lastPreview = null;
+      el.textContent = "Running Gmail preview (may open a browser consent window)…";
+      try {
+        const res = await fetch("/api/likely-applied/gmail-preview", { method: "POST" });
+        const data = await res.json();
+        lastPreview = data;
+        if (data.setup_required) {
+          el.textContent = data.setup_message || "Gmail OAuth setup required.";
+          return;
+        }
+        el.textContent =
+          `Preview (nothing written): scanned ${data.scanned}, matched ${data.matched}, ` +
+          `low-confidence ${data.low_confidence}, unmatched ${data.unmatched_aggregate}.`;
+        if ((data.matched || 0) + (data.low_confidence || 0) > 0) {
+          applyBtn.hidden = false;
+        }
+      } catch (err) {
+        el.textContent = "Gmail preview failed: " + (err && err.message ? err.message : err);
+      }
     });
+
+    document.getElementById("gmail-apply").addEventListener("click", async () => {
+      const el = document.getElementById("gmail-status");
+      el.textContent = "Persisting Gmail evidence (no auto-promote)…";
+      try {
+        const res = await fetch("/api/likely-applied/gmail-apply", { method: "POST" });
+        const data = await res.json();
+        if (!res.ok || data.setup_required) {
+          el.textContent = data.setup_message || data.error || "Persist failed.";
+          return;
+        }
+        el.textContent =
+          `Persisted evidence: matched ${data.matched}, low-confidence ${data.low_confidence}. ` +
+          `Review the strong group; nothing was auto-promoted.`;
+        document.getElementById("gmail-apply").hidden = true;
+        await load();
+      } catch (err) {
+        el.textContent = "Persist failed: " + (err && err.message ? err.message : err);
+      }
+    });
+
     load();
   </script>
 </body>

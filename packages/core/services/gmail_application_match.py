@@ -258,14 +258,32 @@ def fetch_confirmation_messages(*, days: int = DEFAULT_DAYS) -> list[GmailMessag
         creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), [GMAIL_SCOPE])
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except Exception as exc:
+                # Testing-mode OAuth apps often refuse refresh after ~7 days.
+                raise RuntimeError(
+                    f"Gmail token refresh failed ({exc.__class__.__name__}). "
+                    "If the OAuth client is in Google Cloud 'Testing' status, "
+                    "re-approve consent (tokens expire quickly for test apps). "
+                    + revoke_instructions()
+                ) from exc
         else:
             if not CLIENT_SECRETS_PATH.is_file():
                 raise RuntimeError(oauth_setup_instructions())
+            # Avoid macOS reverse-DNS hang inside wsgiref during local OAuth callback.
+            import socket
+
+            socket.getfqdn = lambda name="": (name or "localhost")  # type: ignore[assignment,misc]
+            socket.gethostbyaddr = lambda addr: (addr, [], [addr])  # type: ignore[assignment,misc]
             flow = InstalledAppFlow.from_client_secrets_file(
                 str(CLIENT_SECRETS_PATH), [GMAIL_SCOPE]
             )
-            creds = flow.run_local_server(port=0)
+            creds = flow.run_local_server(
+                host="127.0.0.1",
+                port=8765,
+                open_browser=True,
+            )
         TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
         TOKEN_PATH.chmod(0o600)
 
