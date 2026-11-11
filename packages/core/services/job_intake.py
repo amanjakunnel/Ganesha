@@ -62,17 +62,29 @@ def upsert_job_from_import(
     source_name: str,
     source_type: str,
     legacy_source: str | None = None,
+    reclassify_on_update: bool = True,
 ) -> tuple[str, bool]:
     """Insert or update a job from a structured import row.
 
     Returns (job_id, created_new).
+
+    When ``reclassify_on_update`` is False, duplicate touches refresh scrape
+    metadata but leave existing eligibility decisions unchanged (used by board
+    discovery so eligibility applies to newly created rows only).
     """
     dup = find_duplicate_job(session, {**data, "source_name": source_name})
     if dup.is_duplicate and dup.existing_id:
         existing = (
             session.query(JobPosting).filter(JobPosting.id == dup.existing_id).one()
         )
-        _touch_import(existing, data, source_name, source_type, dup.reasons)
+        _touch_import(
+            existing,
+            data,
+            source_name,
+            source_type,
+            dup.reasons,
+            reclassify_eligibility=reclassify_on_update,
+        )
         session.add(existing)
         ev = AuditEvent(
             entity_type="job_posting",
@@ -148,6 +160,8 @@ def _touch_import(
     source_name: str,
     source_type: str,
     reasons: list[str],
+    *,
+    reclassify_eligibility: bool = True,
 ) -> None:
     if data.get("scraped_at"):
         jp.scraped_at = _parse_date(data.get("scraped_at"))
@@ -156,16 +170,6 @@ def _touch_import(
     if data.get("company_apply_url") and not jp.company_apply_url:
         jp.company_apply_url = data.get("company_apply_url")
     flags = detect_intake_flags(jp.title, jp.description_text or "")
-    simplify_markers = (data.get("intake_metadata") or {}).get("simplify_markers")
-    eligibility = classify_job_eligibility(
-        title=jp.title,
-        description=jp.description_text or "",
-        company_apply_url=jp.company_apply_url,
-        location=data.get("location") or jp.location,
-        employment_type=data.get("employment_type") or jp.employment_type,
-        intake_flags=flags,
-        source_markers=simplify_markers,
-    )
     meta = dict(jp.intake_metadata or {})
     meta["flags"] = flags
     meta.update(
@@ -175,7 +179,18 @@ def _touch_import(
             if k != "eligibility"
         }
     )
-    meta = attach_eligibility_to_metadata(meta, eligibility)
+    if reclassify_eligibility:
+        simplify_markers = (data.get("intake_metadata") or {}).get("simplify_markers")
+        eligibility = classify_job_eligibility(
+            title=jp.title,
+            description=jp.description_text or "",
+            company_apply_url=jp.company_apply_url,
+            location=data.get("location") or jp.location,
+            employment_type=data.get("employment_type") or jp.employment_type,
+            intake_flags=flags,
+            source_markers=simplify_markers,
+        )
+        meta = attach_eligibility_to_metadata(meta, eligibility)
     meta["last_import"] = {
         "source_name": source_name,
         "source_type": source_type,

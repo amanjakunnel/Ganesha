@@ -24,6 +24,11 @@ SOURCE_KEYS = {
         "source_names": ("simplifyjobs",),
         "kind": "github_sync",
     },
+    "company_boards": {
+        "label": "company_boards",
+        "source_names": ("greenhouse", "lever", "ashby"),
+        "kind": "board_api",
+    },
 }
 
 
@@ -76,6 +81,12 @@ def build_sources_summary(session: Session) -> list[dict[str, Any]]:
         last_sync = _last_sync_at(session, source_id)
         if source_id == "simplifyjobs":
             status = "live (manual CLI sync)" if last_sync else "not synced yet"
+        elif source_id == "company_boards":
+            status = (
+                "live (manual / dashboard refresh)"
+                if last_sync
+                else "not synced yet"
+            )
         else:
             status = "static local import"
         summaries.append(
