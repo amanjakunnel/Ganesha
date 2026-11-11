@@ -51,6 +51,7 @@ class PreparePreview:
     simplify_limits: list[str] = field(default_factory=list)
     profile_fields_available: list[str] = field(default_factory=list)
     previously_applied: dict[str, Any] | None = None
+    liveness: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -75,4 +76,5 @@ class PreparePreview:
             "simplify_limits": self.simplify_limits,
             "profile_fields_available": self.profile_fields_available,
             "previously_applied": self.previously_applied,
+            "liveness": self.liveness,
         }

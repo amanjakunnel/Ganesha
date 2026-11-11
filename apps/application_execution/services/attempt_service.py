@@ -226,6 +226,54 @@ def prepare_preview(session: Session, job_id: str) -> PreparePreview:
     except Exception:
         previously_applied = None
 
+    # Also warn on likely-applied review candidates (never auto-block silently).
+    if previously_applied is None:
+        try:
+            from packages.core.services.likely_applied_service import list_likely_applied
+            from packages.core.services.importers.simplify_tracker_csv import (
+                canonical_job_url,
+            )
+
+            urls = {
+                u
+                for u in (
+                    canonical_job_url(job.company_apply_url),
+                    canonical_job_url(job.canonical_url),
+                )
+                if u
+            }
+            for cand in list_likely_applied(session):
+                if cand.job_url and cand.job_url in urls:
+                    previously_applied = {
+                        "source": "likely_applied_review",
+                        "status": "likely_applied",
+                        "company": cand.company,
+                        "role": cand.role,
+                        "requires_explicit_continue": True,
+                        "message": (
+                            "This posting matches a 'likely applied' review candidate. "
+                            "Confirm or reject it under /likely-applied, or explicitly continue."
+                        ),
+                    }
+                    break
+        except Exception:
+            pass
+
+    liveness_payload = None
+    try:
+        from packages.core.services.job_liveness import check_job_liveness
+
+        live = check_job_liveness(session, job, mark_closed=True)
+        liveness_payload = live.to_dict()
+        if not live.live:
+            can_prepare = False
+            block_reason = block_reason or (
+                "Posting appears closed or unreachable (liveness check)."
+            )
+            missing.append("listing_not_live")
+    except Exception:
+        liveness_payload = {"live": None, "reason": "liveness_check_skipped"}
+
     return PreparePreview(
         job_id=job_id,
         company=company,
@@ -248,6 +296,7 @@ def prepare_preview(session: Session, job_id: str) -> PreparePreview:
         simplify_limits=list(SIMPLIFY_HANDOFF_INSTRUCTIONS),
         profile_fields_available=fields,
         previously_applied=previously_applied,
+        liveness=liveness_payload,
     )
 
 

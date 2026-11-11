@@ -216,6 +216,8 @@ def preview_gmail_matches(
         else:
             preview.matched += 1
         if persist:
+            from sqlalchemy.orm.attributes import flag_modified
+
             payload = dict(row.payload_json or {})
             evidence = list(payload.get("gmail_match_evidence") or [])
             evidence.append(
@@ -230,6 +232,7 @@ def preview_gmail_matches(
             )
             payload["gmail_match_evidence"] = evidence
             row.payload_json = payload
+            flag_modified(row, "payload_json")
             session.add(row)
     if persist:
         session.flush()
@@ -239,10 +242,10 @@ def preview_gmail_matches(
 def fetch_confirmation_messages(*, days: int = DEFAULT_DAYS) -> list[GmailMessageMeta]:
     """Live Gmail API fetch. Requires google-auth / google-api-python-client."""
     try:
-        from google.auth.transport.requests import Request
-        from google.oauth2.credentials import Credentials
-        from google_auth_oauthlib.flow import InstalledAppFlow
-        from googleapiclient.discovery import build
+        from google.auth.transport.requests import Request  # type: ignore[import-not-found]
+        from google.oauth2.credentials import Credentials  # type: ignore[import-not-found]
+        from google_auth_oauthlib.flow import InstalledAppFlow  # type: ignore[import-not-found]
+        from googleapiclient.discovery import build  # type: ignore[import-not-found]
     except ImportError as exc:
         raise RuntimeError(
             "Install google-api-python-client google-auth-httplib2 "

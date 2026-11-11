@@ -30,6 +30,12 @@ class ApprovedProfile:
     linkedin_url: str | None = None
     github_url: str | None = None
     portfolio_url: str | None = None
+    # Education — verified corpus facts only (never invented).
+    school: str | None = None
+    degree: str | None = None
+    discipline: str | None = None
+    education_start: str | None = None
+    education_end: str | None = None
 
 
 def _split_name(full: str) -> tuple[str, str]:
@@ -73,6 +79,7 @@ def load_approved_profile(session: Session) -> ApprovedProfile:
                 location = text.split("|")[0].strip()
                 break
     first, last = _split_name(CANDIDATE_NAME)
+    school, degree, discipline, edu_start, edu_end = _extract_education(facts)
     return ApprovedProfile(
         full_name=CANDIDATE_NAME,
         first_name=first,
@@ -83,4 +90,53 @@ def load_approved_profile(session: Session) -> ApprovedProfile:
         linkedin_url=linkedin.group(0).rstrip(".,)") if linkedin else None,
         github_url=github.group(0).rstrip(".,)") if github else None,
         portfolio_url=portfolio,
+        school=school,
+        degree=degree,
+        discipline=discipline,
+        education_start=edu_start,
+        education_end=edu_end,
     )
+
+
+def _extract_education(
+    facts: list[ResumeFact],
+) -> tuple[str | None, str | None, str | None, str | None, str | None]:
+    school = degree = discipline = edu_start = edu_end = None
+    for fact in facts:
+        text = (fact.source_text or "").strip()
+        if not text:
+            continue
+        low = text.lower()
+        if school is None and any(
+            k in low
+            for k in (
+                "pennsylvania state",
+                "penn state",
+                "pes university",
+                "university",
+                "college",
+            )
+        ):
+            if len(text) < 120:
+                school = text.split("|")[0].strip()
+        if degree is None and any(
+            k in low for k in ("bachelor", "master", "b.s", "b.s.", "m.s", "bs ", "ms ")
+        ):
+            degree = text.split("|")[0].strip()[:80]
+        if discipline is None and any(
+            k in low
+            for k in (
+                "computer science",
+                "software",
+                "information science",
+                "engineering",
+            )
+        ):
+            if len(text) < 100:
+                discipline = text.split("|")[0].strip()
+        years = re.findall(r"\b(20\d{2})\b", text)
+        if years and edu_start is None:
+            edu_start = years[0]
+            if len(years) > 1:
+                edu_end = years[-1]
+    return school, degree, discipline, edu_start, edu_end
