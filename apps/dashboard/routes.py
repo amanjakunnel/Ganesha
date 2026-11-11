@@ -723,11 +723,115 @@ def api_application_attempt_cancel(
         raise
 
 
+class LikelyAppliedActionBody(BaseModel):
+    record_ids: list[str]
+    action: str  # confirm | reject
+
+
+@router.get("/api/likely-applied")
+def api_likely_applied(
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    from packages.core.services.likely_applied_service import list_likely_applied
+    from packages.core.services.gmail_application_match import gmail_ready, gmail_paths
+
+    try:
+        check_database(session)
+        items = [c.to_dict() for c in list_likely_applied(session)]
+        return JSONResponse(
+            {
+                "items": items,
+                "count": len(items),
+                "low_confidence": sum(1 for i in items if i.get("low_confidence")),
+                "gmail_ready": gmail_ready(),
+                "gmail_paths": gmail_paths(),
+            }
+        )
+    except Exception as exc:
+        if is_database_unavailable(exc):
+            return JSONResponse({"error": DB_UNAVAILABLE_MESSAGE}, status_code=503)
+        raise
+
+
+@router.post("/api/likely-applied/action")
+def api_likely_applied_action(
+    body: LikelyAppliedActionBody,
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    from packages.core.services.likely_applied_service import (
+        confirm_likely_applied,
+        reject_likely_applied,
+    )
+
+    try:
+        check_database(session)
+        if body.action == "confirm":
+            result = confirm_likely_applied(session, body.record_ids)
+        elif body.action == "reject":
+            result = reject_likely_applied(session, body.record_ids)
+        else:
+            return JSONResponse({"error": "action must be confirm or reject"}, status_code=400)
+        session.commit()
+        return JSONResponse(result)
+    except Exception as exc:
+        session.rollback()
+        if is_database_unavailable(exc):
+            return JSONResponse({"error": DB_UNAVAILABLE_MESSAGE}, status_code=503)
+        raise
+
+
+@router.post("/api/likely-applied/gmail-preview")
+def api_gmail_preview(
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    """Preview Gmail confirmation matches without writing (unless client_secret present)."""
+    from packages.core.services.gmail_application_match import preview_gmail_matches
+
+    try:
+        check_database(session)
+        preview = preview_gmail_matches(session, persist=False)
+        return JSONResponse(preview.to_dict())
+    except Exception as exc:
+        if is_database_unavailable(exc):
+            return JSONResponse({"error": DB_UNAVAILABLE_MESSAGE}, status_code=503)
+        raise
+
+
+@router.post("/api/likely-applied/gmail-apply")
+def api_gmail_apply(
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    """Persist Gmail match evidence onto saved-only records (still never auto-promotes)."""
+    from packages.core.services.gmail_application_match import preview_gmail_matches
+
+    try:
+        check_database(session)
+        preview = preview_gmail_matches(session, persist=True)
+        if preview.setup_required:
+            return JSONResponse(preview.to_dict(), status_code=400)
+        session.commit()
+        return JSONResponse(preview.to_dict())
+    except Exception as exc:
+        session.rollback()
+        if is_database_unavailable(exc):
+            return JSONResponse({"error": DB_UNAVAILABLE_MESSAGE}, status_code=503)
+        raise
+
+
 @router.get("/", response_class=HTMLResponse)
 def jobs_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "jobs.html",
+        {"db_unavailable_message": DB_UNAVAILABLE_MESSAGE},
+    )
+
+
+@router.get("/likely-applied", response_class=HTMLResponse)
+def likely_applied_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "likely_applied.html",
         {"db_unavailable_message": DB_UNAVAILABLE_MESSAGE},
     )
 

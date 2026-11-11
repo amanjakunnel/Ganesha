@@ -20,6 +20,11 @@ from packages.core.domain.models import (
     hash_text,
     make_uuid,
 )
+from packages.core.services.status_precedence import (
+    prefer_status,
+    status_rank,
+    would_downgrade,
+)
 
 SOURCE_NAME = "simplify"
 SOURCE_TYPE = "tracker_csv_export"
@@ -36,6 +41,13 @@ STATUS_MAP: dict[str, str | None] = {
     "GHOSTED": "ghosted",
     "ACCEPTED": "accepted",
 }
+
+# Shared Greenhouse embed URLs that cannot be attributed to a single posting.
+# Drop from reports; never merge; never count as applied.
+AMBIGUOUS_URL_MARKERS: tuple[str, ...] = (
+    "boards.greenhouse.io/embed/job_app",
+    "greenhouse.io/embed/",
+)
 
 
 @dataclass
@@ -89,6 +101,23 @@ def canonical_job_url(url: str | None) -> str | None:
     # Drop tracking query/fragment for dedupe; keep path.
     clean = parsed._replace(query="", fragment="")
     return urlunparse(clean).rstrip("/")
+
+
+def is_ambiguous_greenhouse_embed(url: str | None) -> bool:
+    """True for shared Greenhouse embed URLs that must be ignored."""
+    if not url:
+        return False
+    low = url.lower()
+    return any(marker in low for marker in AMBIGUOUS_URL_MARKERS)
+
+
+def posting_merge_key(item: dict[str, Any]) -> str:
+    """Key for same-posting status merge (canonical URL, else company|role)."""
+    if item.get("job_url"):
+        return f"url:{item['job_url']}"
+    company = (item.get("company") or "").strip().lower()
+    role = (item.get("role") or "").strip().lower()
+    return f"cr:{company}|{role}"
 
 
 def map_simplify_status(raw: str | None) -> tuple[str, str | None]:
@@ -162,10 +191,15 @@ def import_simplify_tracker_csv(
         rows = list(reader)
     report.rows_read = len(rows)
 
-    # Collapse duplicate rows by canonical URL + mapped status + applied date.
+    # Collapse exact duplicate rows; then merge same-posting statuses by precedence.
     collapsed: dict[str, dict[str, Any]] = {}
+    skipped_ambiguous = 0
     for idx, row in enumerate(rows, start=2):
         url = canonical_job_url(row.get("Job URL"))
+        raw_url = (row.get("Job URL") or "").strip() or None
+        if is_ambiguous_greenhouse_embed(url or raw_url):
+            skipped_ambiguous += 1
+            continue
         status_raw, status_mapped = map_simplify_status(row.get("Status"))
         applied = (row.get("Applied Date") or "").strip() or None
         key = hash_text(
@@ -188,7 +222,7 @@ def import_simplify_tracker_csv(
             "role": role,
             "location": location,
             "job_url": url,
-            "job_url_raw": ((row.get("Job URL") or "").strip() or None),
+            "job_url_raw": raw_url,
             "applied_date": applied,
             "status_raw": (row.get("Status") or "").strip()[:64],
             "status_mapped": status_mapped,
@@ -198,7 +232,49 @@ def import_simplify_tracker_csv(
             "source_import_key": key,
         }
 
+    # Same posting, multiple statuses → keep highest-precedence row as canonical
+    # for JobApplication linking; still import distinct source_import_keys unless
+    # the incoming status would downgrade an already-stored higher status.
+    best_by_posting: dict[str, dict[str, Any]] = {}
+    for item in collapsed.values():
+        mkey = posting_merge_key(item)
+        prior = best_by_posting.get(mkey)
+        if prior is None:
+            best_by_posting[mkey] = item
+            continue
+        winner_status = prefer_status(prior["status_mapped"], item["status_mapped"])
+        if winner_status == item["status_mapped"] and status_rank(
+            item["status_mapped"]
+        ) > status_rank(prior["status_mapped"]):
+            best_by_posting[mkey] = item
+            report.duplicates_collapsed += 1
+        else:
+            report.duplicates_collapsed += 1
+
+    if skipped_ambiguous:
+        # Informational only — not an import failure.
+        report.errors.append(
+            f"edge: skipped_ambiguous_greenhouse_embed={skipped_ambiguous} "
+            "(ignored; not counted as applied)"
+        )
+
     url_index = _build_url_index(session)
+
+    # Highest mapped status already stored per posting URL (for downgrade guard).
+    existing_best: dict[str, str] = {}
+    for rec in session.query(SimplifyHistoryRecord).yield_per(500):
+        if is_ambiguous_greenhouse_embed(rec.job_url or rec.job_url_raw):
+            continue
+        mkey = posting_merge_key(
+            {
+                "job_url": rec.job_url,
+                "company": rec.company_name,
+                "role": rec.role_title,
+            }
+        )
+        existing_best[mkey] = prefer_status(
+            existing_best.get(mkey), rec.status_mapped
+        ) or (rec.status_mapped or "")
 
     for item in collapsed.values():
         raw = (item["status_raw"] or "").upper()
@@ -221,22 +297,35 @@ def import_simplify_tracker_csv(
             report.already_imported += 1
             continue
 
+        mkey = posting_merge_key(item)
+        prior_best = existing_best.get(mkey)
+        if prior_best and would_downgrade(prior_best, item["status_mapped"]):
+            # Idempotent no-op: never insert a SAVED that would appear to downgrade APPLIED.
+            report.already_imported += 1
+            continue
+
         job, ambiguous_reason = _match_job(url_index, item["job_url"])
         if ambiguous_reason:
-            report.ambiguous.append(
-                {
-                    "row_index": item["row_index"],
-                    "company": item["company"],
-                    "role": item["role"],
-                    "url": item["job_url"],
-                    "reason": ambiguous_reason,
-                }
-            )
+            # Do not add shared-embed style ambiguity to applied counts; still note.
+            if ambiguous_reason == "multiple_jobs_same_url":
+                report.ambiguous.append(
+                    {
+                        "row_index": item["row_index"],
+                        "company": item["company"],
+                        "role": item["role"],
+                        "url": item["job_url"],
+                        "reason": ambiguous_reason,
+                    }
+                )
         if job is not None:
             report.matched_existing_jobs += 1
 
         if dry_run:
             report.new_records += 1
+            if item["status_mapped"]:
+                existing_best[mkey] = prefer_status(
+                    existing_best.get(mkey), item["status_mapped"]
+                ) or item["status_mapped"]
             continue
 
         record = SimplifyHistoryRecord(
@@ -265,10 +354,16 @@ def import_simplify_tracker_csv(
         )
         session.add(record)
         report.new_records += 1
+        if item["status_mapped"]:
+            existing_best[mkey] = prefer_status(
+                existing_best.get(mkey), item["status_mapped"]
+            ) or item["status_mapped"]
 
         # Link JobApplication only for applied-like statuses on a matched job.
         # Never mark saved_only as submitted/applied.
-        if job is not None and item["status_mapped"] == "applied":
+        if job is not None and status_rank(item["status_mapped"]) >= status_rank(
+            "applied"
+        ):
             app = (
                 session.query(JobApplication)
                 .filter(JobApplication.job_posting_id == job.id)
