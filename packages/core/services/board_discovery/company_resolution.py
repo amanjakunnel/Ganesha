@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterable
 
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from packages.core.domain.models import JobPosting
 from packages.core.services.board_discovery.ashby import extract_ashby_board_name
@@ -69,20 +69,26 @@ def collect_board_candidates_from_jobs(
     *,
     limit_scan: int = 8000,
 ) -> list[BoardCandidate]:
+    # Only pull URL/company columns — full JobPosting rows include huge descriptions
+    # and have crashed local Postgres under memory pressure.
+    from packages.core.domain.models import Company
+
     rows = (
-        session.query(JobPosting)
-        .options(joinedload(JobPosting.company))
+        session.query(
+            JobPosting.company_apply_url,
+            JobPosting.canonical_url,
+            Company.canonical_name,
+        )
+        .outerjoin(Company, Company.id == JobPosting.company_id)
         .order_by(JobPosting.scraped_at.desc().nullslast())
         .limit(limit_scan)
         .all()
     )
     out: list[BoardCandidate] = []
     seen: set[str] = set()
-    for job in rows:
-        company_name = ""
-        if job.company is not None:
-            company_name = job.company.canonical_name or ""
-        for url in (job.company_apply_url, job.canonical_url):
+    for apply_url, canonical_url, company_name in rows:
+        company_name = company_name or ""
+        for url in (apply_url, canonical_url):
             parsed = parse_board_from_url(url)
             if not parsed:
                 continue
@@ -179,14 +185,47 @@ def resolve_company_boards(
     limit: int,
     csv_text: str | None = None,
 ) -> ResolutionResult:
+    """Build a pilot board list from (a) job-URL tokens and (b) referral companies.
+
+    Caps total boards at ``limit`` (default 25). Job-derived boards are preferred
+    because their tokens are already proven live apply URLs. Referral companies
+    without a matching board stay in ``unresolved`` and are skipped.
+    """
     companies, sheet_error = load_pilot_companies(limit=limit, csv_text=csv_text)
     result = ResolutionResult(companies=companies, sheet_error=sheet_error)
-    if sheet_error:
-        return result
-    if not companies:
-        return result
     candidates = collect_board_candidates_from_jobs(session)
-    boards, unresolved = resolve_boards_for_companies(companies, candidates)
-    result.boards = boards
+
+    # (a) Boards already evidenced by job postings — unique by platform|region|token.
+    job_boards: list[BoardRef] = []
+    seen: set[str] = set()
+    for cand in candidates:
+        ref = BoardRef(
+            platform=cand.platform,
+            board_token=cand.board_token,
+            company=cand.company_name or cand.board_token,
+            region=cand.region,
+        )
+        if ref.key in seen:
+            continue
+        seen.add(ref.key)
+        job_boards.append(ref)
+
+    # (b) Referral sheet companies that match a job-derived board token/company.
+    sheet_boards: list[BoardRef] = []
+    unresolved: list[UnresolvedCompany] = []
+    if companies:
+        sheet_boards, unresolved = resolve_boards_for_companies(companies, candidates)
+
+    merged: list[BoardRef] = []
+    merged_keys: set[str] = set()
+    for ref in [*job_boards, *sheet_boards]:
+        if ref.key in merged_keys:
+            continue
+        merged_keys.add(ref.key)
+        merged.append(ref)
+        if len(merged) >= max(0, limit):
+            break
+
+    result.boards = merged
     result.unresolved = unresolved
     return result

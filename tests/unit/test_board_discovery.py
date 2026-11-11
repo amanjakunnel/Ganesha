@@ -309,6 +309,9 @@ def test_mark_missing_closed_never_deletes() -> None:
         assert (gone.intake_metadata or {}).get("simplify_markers", {}).get(
             "listing_closed"
         )
+        assert gone.status == "closed"
         assert session.get(JobPosting, gone.id) is not None
+        session.refresh(kept)
+        assert kept.status != "closed"
     finally:
         session.close()

@@ -196,6 +196,9 @@ def mark_missing_board_jobs_closed(
         )
         meta = attach_eligibility_to_metadata(meta, eligibility)
         job.intake_metadata = meta
+        # Mark workflow status closed (never delete). Preserve applied_manually.
+        if job.status != "applied_manually":
+            job.status = "closed"
         session.add(job)
         closed += 1
     if closed:
