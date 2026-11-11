@@ -223,10 +223,11 @@ def list_likely_applied(session: Session) -> list[LikelyAppliedCandidate]:
         low = False
 
         if is_meaningful_applied_date(row.applied_date_text):
+            applied_date = (row.applied_date_text or "").strip()
             evidence.append(
                 LikelyAppliedEvidence(
                     kind="applied_date",
-                    detail=f"Applied Date field = {row.applied_date_text.strip()}",
+                    detail=f"Applied Date field = {applied_date}",
                     strength="weak",
                     match_basis="simplify_applied_date_text",
                 )

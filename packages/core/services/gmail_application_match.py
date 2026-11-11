@@ -242,10 +242,10 @@ def preview_gmail_matches(
 def fetch_confirmation_messages(*, days: int = DEFAULT_DAYS) -> list[GmailMessageMeta]:
     """Live Gmail API fetch. Requires google-auth / google-api-python-client."""
     try:
-        from google.auth.transport.requests import Request  # type: ignore[import-not-found]
-        from google.oauth2.credentials import Credentials  # type: ignore[import-not-found]
-        from google_auth_oauthlib.flow import InstalledAppFlow  # type: ignore[import-not-found]
-        from googleapiclient.discovery import build  # type: ignore[import-not-found]
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
+        from google_auth_oauthlib.flow import InstalledAppFlow  # type: ignore[import-untyped]
+        from googleapiclient.discovery import build  # type: ignore[import-untyped]
     except ImportError as exc:
         raise RuntimeError(
             "Install google-api-python-client google-auth-httplib2 "
@@ -255,7 +255,9 @@ def fetch_confirmation_messages(*, days: int = DEFAULT_DAYS) -> list[GmailMessag
     TOKEN_DIR.mkdir(parents=True, exist_ok=True)
     creds = None
     if TOKEN_PATH.is_file():
-        creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), [GMAIL_SCOPE])
+        creds = Credentials.from_authorized_user_file(  # type: ignore[no-untyped-call]
+            str(TOKEN_PATH), [GMAIL_SCOPE]
+        )
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             try:
@@ -274,8 +276,14 @@ def fetch_confirmation_messages(*, days: int = DEFAULT_DAYS) -> list[GmailMessag
             # Avoid macOS reverse-DNS hang inside wsgiref during local OAuth callback.
             import socket
 
-            socket.getfqdn = lambda name="": (name or "localhost")  # type: ignore[assignment,misc]
-            socket.gethostbyaddr = lambda addr: (addr, [], [addr])  # type: ignore[assignment,misc]
+            def _fqdn(name: str = "") -> str:
+                return name or "localhost"
+
+            def _hostbyaddr(addr: str) -> tuple[str, list[str], list[str]]:
+                return addr, [], [addr]
+
+            socket.getfqdn = _fqdn
+            socket.gethostbyaddr = _hostbyaddr
             flow = InstalledAppFlow.from_client_secrets_file(
                 str(CLIENT_SECRETS_PATH), [GMAIL_SCOPE]
             )
