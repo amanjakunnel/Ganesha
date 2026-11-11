@@ -79,6 +79,44 @@ def _job(
     return job
 
 
+def test_internship_job_blocks_generation(session: Session, tmp_path: Path) -> None:
+    root = build_standard_corpus(tmp_path / "resumes")
+    scan_resume_corpus(session, path=root, rebuild=True)
+    session.commit()
+    job = _job(
+        session,
+        title="Software Engineering Intern",
+        description=(
+            "Summer internship building internal tools with mentors and product engineers. "
+            "Learn cloud and backend fundamentals while shipping small projects. " * 3
+        ),
+    )
+    assert generation_preflight(session, job) == ELIGIBILITY_BLOCK_MSG
+    preview = preview_generation(session, job.id, deterministic_only=True)
+    assert preview["can_generate"] is False
+    result = generate_resume_for_job(session, job.id, deterministic_only=True)
+    session.commit()
+    assert result.status == "blocked"
+
+
+def test_phd_required_blocks_generation(session: Session, tmp_path: Path) -> None:
+    root = build_standard_corpus(tmp_path / "resumes")
+    scan_resume_corpus(session, path=root, rebuild=True)
+    session.commit()
+    job = _job(
+        session,
+        title="Research Engineer",
+        description=(
+            "PhD required. Work on applied research with production ML systems and "
+            "publish internal findings with partner teams across the organization. " * 3
+        ),
+    )
+    assert generation_preflight(session, job) == ELIGIBILITY_BLOCK_MSG
+    result = generate_resume_for_job(session, job.id, deterministic_only=True)
+    session.commit()
+    assert result.status == "blocked"
+
+
 def test_clearance_job_blocks_generation(session: Session, tmp_path: Path) -> None:
     root = build_standard_corpus(tmp_path / "resumes")
     scan_resume_corpus(session, path=root, rebuild=True)

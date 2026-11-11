@@ -34,12 +34,21 @@ class Settings(BaseSettings):
     resume_desktop_pdf_path: str = (
         "/Users/amanjakunnel/Desktop/Alex_Michael_Manjakunnel_Resume.pdf"
     )
+    ganesha_cover_letters_dir: Optional[str] = None
+    cover_desktop_pdf_path: str = (
+        "/Users/amanjakunnel/Desktop/Alex_Michael_Manjakunnel_Cover.pdf"
+    )
     semantic_fit_provider: str = "none"
     anthropic_api_key: Optional[str] = None
     anthropic_model: str = "claude-haiku-5-5"
     # User-confirmed school GPAs. Other conflicting GPAs stay omitted.
     authoritative_penn_state_gpa: Optional[str] = None
     authoritative_pes_gpa: Optional[str] = None
+    # Evidence-fit bands (0–100 suitability score, not hiring probability).
+    fit_recommended_min: int = 70
+    fit_stretch_min: int = 50
+    # Default dashboard feed: recommended | recommended_stretch | needs_review | low_fit | all_eligible
+    fit_default_feed: str = "recommended"
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"

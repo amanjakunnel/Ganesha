@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from apps.resume_generation.paths import (
     GENERATED_ROOT,
+    WORD_CONVERSION_ROOT,
     default_source_path,
     desktop_pdf_path,
 )
@@ -97,6 +98,20 @@ def doctor_cmd() -> None:
     typer.echo(f"  Selected PDF engine: {engine.selected or 'NONE'}")
     if not engine.selected:
         typer.echo(f"    → {engine.detail}")
+    from apps.resume_generation.services.pdf_render_service import (
+        describe_word_workspace,
+    )
+
+    WORD_CONVERSION_ROOT.mkdir(parents=True, exist_ok=True)
+    choice = describe_word_workspace()
+    typer.echo(f"  Word conversion workspace: {WORD_CONVERSION_ROOT}")
+    typer.echo(f"  Word workspace mode: {choice.mode}")
+    typer.echo(f"  Word workspace active path: {choice.path}")
+    typer.echo(f"  Word workspace detail: {choice.detail}")
+    typer.echo(
+        "  One-time macOS setup: run `resumes authorize-word` once and approve "
+        "Files and Folders access for the permanent workspace only (not Full Disk Access)."
+    )
     typer.echo(f"  PDF validator (pypdf): {'ok' if pypdf_ok else 'MISSING'}")
     typer.echo(
         f"  Output dir: {GENERATED_ROOT} "
@@ -110,6 +125,81 @@ def doctor_cmd() -> None:
     typer.echo(f"  Semantic provider: {sem['provider']}")
     typer.echo(f"  Semantic model: {sem['model']}")
     typer.echo(f"  Semantic API key: {sem['api_key']}")
+
+
+@resumes_app.command("authorize-word")
+def authorize_word_cmd() -> None:
+    """One-time Word Files-and-Folders grant for the stable conversion workspace.
+
+    Opens a probe DOCX with Word activated so macOS can show its access dialog.
+    Approve access only to the printed workspace path. Do not enable Full Disk
+    Access. After a successful grant, normal generation should stay unattended.
+    """
+    import subprocess
+    from docx import Document
+
+    WORD_CONVERSION_ROOT.mkdir(parents=True, exist_ok=True)
+    probe_docx = WORD_CONVERSION_ROOT / "_authorize_probe.docx"
+    probe_pdf = WORD_CONVERSION_ROOT / "_authorize_probe.pdf"
+    Document().save(probe_docx)
+    if probe_pdf.exists():
+        probe_pdf.unlink()
+    typer.echo(f"Word conversion workspace: {WORD_CONVERSION_ROOT.resolve()}")
+    typer.echo(
+        "If macOS asks, grant Microsoft Word access to THAT folder only, then "
+        "this command should finish by writing a probe PDF."
+    )
+    script = f'''
+set docxPOSIX to POSIX file "{probe_docx.resolve()}"
+set pdfPOSIX to POSIX file "{probe_pdf.resolve()}"
+tell application "Finder"
+    activate
+    open docxPOSIX
+end tell
+delay 3
+tell application "Microsoft Word"
+    if (count of documents) is 0 then
+        error "Word still cannot open the workspace. Grant Files and Folders access to {WORD_CONVERSION_ROOT.resolve()} and retry."
+    end if
+    set theDoc to document 1
+    save as theDoc file name pdfPOSIX file format format PDF
+    try
+        close theDoc saving no
+    end try
+end tell
+'''
+    result = subprocess.run(
+        ["osascript", "-e", script],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    ok = probe_pdf.exists() and probe_pdf.stat().st_size > 0
+    try:
+        if probe_docx.exists():
+            probe_docx.unlink()
+    except OSError:
+        pass
+    if ok:
+        from apps.resume_generation.services.pdf_render_service import (
+            mark_word_workspace_authorized,
+        )
+
+        mark_word_workspace_authorized()
+        typer.echo(f"Authorization OK — probe PDF written: {probe_pdf}")
+        try:
+            probe_pdf.unlink()
+        except OSError:
+            pass
+        return
+    detail = (result.stderr or result.stdout or "").strip()
+    typer.echo(f"Authorization incomplete: {detail or 'no PDF produced'}")
+    typer.echo(
+        "Until the stable workspace is granted, generation falls back to an "
+        "already-authorized prior job folder so conversions can still run."
+    )
+    raise typer.Exit(code=1)
 
 
 @resumes_app.command("audit")

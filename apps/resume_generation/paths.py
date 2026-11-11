@@ -6,11 +6,13 @@ from pathlib import Path
 
 from packages.core.settings import settings
 
-TEMPLATE_VERSION = "ganesha-ats-v1"
+TEMPLATE_VERSION = "ganesha-ats-v2-tab-layout"
 OUTPUT_BASENAME = "Alex_Michael_Manjakunnel_Resume"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GENERATED_ROOT = REPO_ROOT / "data" / "generated_resumes"
 FAILED_ROOT = GENERATED_ROOT / "_failed"
+# Stable Word conversion staging (avoids per-timestamp TCC prompts).
+WORD_CONVERSION_ROOT = GENERATED_ROOT / "_word_conversion"
 
 PRIMARY_TRACK_FILES = {
     "Current_Resume_Dev.docx": "dev",

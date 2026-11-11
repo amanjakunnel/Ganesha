@@ -10,13 +10,24 @@
   <header class="site-header">
     <div class="header-text">
       <h1>Ganesha Job Dashboard</h1>
-      <p class="subtitle">Read-only view of jobs in your local Ganesha database</p>
+      <p class="subtitle">Local jobs with evidence-based fit bands. Generation lives on each job’s detail page.</p>
     </div>
     <p class="result-count" id="result-count" aria-live="polite">Loading…</p>
   </header>
 
   <main>
     <form id="filters" class="filters" role="search" aria-label="Job filters">
+      <div class="filter-field">
+        <label for="fit">Fit view</label>
+        <select id="fit" name="fit">
+          <option value="recommended" selected>Recommended</option>
+          <option value="recommended_stretch">Recommended + Stretch</option>
+          <option value="needs_review">Needs review</option>
+          <option value="low_fit">Low fit</option>
+          <option value="all_eligible">All eligible</option>
+          <option value="all">All stored jobs</option>
+        </select>
+      </div>
       <div class="filter-field">
         <label for="q">Keyword</label>
         <input type="search" id="q" name="q" placeholder="Search title or company" autocomplete="off">
@@ -44,6 +55,7 @@
         <select id="sort" name="sort">
           <option value="date_desc">Newest added</option>
           <option value="date_asc">Oldest added</option>
+          <option value="fit_desc">Fit score</option>
           <option value="title_asc">Title A–Z</option>
           <option value="title_desc">Title Z–A</option>
           <option value="company_asc">Company A–Z</option>
@@ -60,6 +72,7 @@
       </div>
     </form>
 
+    <p id="fit-counts" class="fit-counts muted" aria-live="polite"></p>
     <p id="status-message" class="status-message" hidden role="status"></p>
 
     <div class="table-wrap" id="results-wrap">
@@ -68,10 +81,11 @@
           <tr>
             <th scope="col">Title</th>
             <th scope="col">Company</th>
+            <th scope="col">Fit</th>
             <th scope="col">Location</th>
             <th scope="col">Source</th>
             <th scope="col">Date found</th>
-            <th scope="col">Original posting</th>
+            <th scope="col">Details</th>
           </tr>
         </thead>
         <tbody id="jobs-body">
@@ -88,9 +102,10 @@
 
   <script>
     window.GANESHA_DASHBOARD = {
-      dbUnavailableMessage: {{ db_unavailable_message | tojson }}
+      dbUnavailableMessage: {{ db_unavailable_message | tojson }},
+      page: "jobs"
     };
   </script>
-  <script src="/static/dashboard.js"></script>
+  <script src="/static/dashboard.js?v=fit1"></script>
 </body>
 </html>

@@ -30,7 +30,8 @@ python -m apps.cli.main resumes doctor
 ```
 
 Reports source folder access, `python-docx`, Microsoft Word / LibreOffice
-availability, selected PDF engine, PDF validator, output paths, and semantic
+availability, selected PDF engine, Word conversion workspace, PDF validator,
+output paths, and semantic
 provider configuration state (never prints secret values).
 
 ## Generate from CLI
@@ -46,9 +47,30 @@ Safe flags:
 - `--dry-run`
 - `--no-desktop-copy`
 
-The dashboard **Actions → Generate tailored resume** control uses the same
+The dashboard job-detail **Generate tailored resume** button uses the same
 generation service. Resume generation is never triggered by feed sync or job
 scoring.
+
+## Word PDF conversion (macOS)
+
+DOCX files are written with `python-docx`. Microsoft Word converts DOCX→PDF
+through a **stable workspace**:
+
+`data/generated_resumes/_word_conversion/`
+
+Job-specific timestamp folders and Desktop copies are written by Python after a
+successful conversion, so Word should not need a new Files-and-Folders grant for
+every generation.
+
+One-time setup if Word cannot open the workspace:
+
+```bash
+python -m apps.cli.main resumes authorize-word
+```
+
+Approve access **only** to that workspace (Privacy & Security → Files and
+Folders → Microsoft Word). Do not enable Full Disk Access as the default. If a
+conversion hangs on a dialog, cancel it and re-run `authorize-word`.
 
 ## Optional semantic provider
 

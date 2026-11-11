@@ -17,6 +17,16 @@ class JobSort(str, Enum):
     location_desc = "location_desc"
     source_asc = "source_asc"
     source_desc = "source_desc"
+    fit_desc = "fit_desc"
+
+
+class FitFeedFilter(str, Enum):
+    recommended = "recommended"
+    recommended_stretch = "recommended_stretch"
+    needs_review = "needs_review"
+    low_fit = "low_fit"
+    all_eligible = "all_eligible"
+    all = "all"
 
 
 class JobDashboardItem(BaseModel):
@@ -32,12 +42,26 @@ class JobDashboardItem(BaseModel):
     created_at: datetime | None
     job_url: str | None
     status: str
+    fit_band: str | None = None
+    fit_score: int | None = None
+    fit_reason: str | None = None
+    fit_confidence: str | None = None
+    eligibility: str | None = None
 
 
 class SourceOption(BaseModel):
     value: str
     label: str
     count: int
+
+
+class FitBandCounts(BaseModel):
+    recommended: int = 0
+    stretch: int = 0
+    needs_review: int = 0
+    low_fit: int = 0
+    unscored: int = 0
+    all_eligible: int = 0
 
 
 class JobsListResponse(BaseModel):
@@ -47,6 +71,8 @@ class JobsListResponse(BaseModel):
     total: int
     total_pages: int
     available_sources: list[SourceOption]
+    fit_counts: FitBandCounts = Field(default_factory=FitBandCounts)
+    fit_filter: str = "recommended"
 
 
 class JobQueryParams(BaseModel):
@@ -55,6 +81,7 @@ class JobQueryParams(BaseModel):
     location: str | None = None
     date_from: date | None = None
     date_to: date | None = None
+    fit: FitFeedFilter = FitFeedFilter.recommended
     sort: JobSort = JobSort.date_desc
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=50, ge=1, le=100)

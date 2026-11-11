@@ -114,6 +114,9 @@ def discover_docx_files(root: Path) -> tuple[list[Path], ScanSummary]:
         if path.suffix.lower() != ".docx":
             summary.skipped += 1
             continue
+        if any(part.lower() in {"cover letters", "cover_letters"} for part in path.parts):
+            summary.skipped += 1
+            continue
         found.append(path)
         summary.discovered += 1
     return found, summary
@@ -280,7 +283,9 @@ def extract_facts_from_docx(path: Path, root: Path) -> list[ExtractedFact]:
             and len(raw) < 80
             and len(raw.split()) <= 8
         ):
-            pending_org = raw.replace("\t", " ").strip()
+            # Preserve tab-derived gaps as multi-spaces so employer/location can split
+            # cleanly; never rely on visual space padding in the renderer.
+            pending_org = re.sub(r"[ \t]*\t[ \t]*", "  ", raw).strip()
             continue
 
         if section in {"experience", "projects", "education"} and _looks_like_header(

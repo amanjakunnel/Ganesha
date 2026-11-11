@@ -21,6 +21,12 @@
     });
   }
 
+  function fitBadge(band, score) {
+    const label = band || "unscored";
+    const scoreTxt = score == null ? "" : ` · fit ${score}`;
+    return `<span class="fit-badge fit-${escapeHtml(label)}">${escapeHtml(label.split("_").join(" "))}${escapeHtml(scoreTxt)}</span>`;
+  }
+
   if (config.page === "job_detail") {
     initJobDetail();
   } else {
@@ -32,6 +38,7 @@
     const jobsBody = document.getElementById("jobs-body");
     const resultCount = document.getElementById("result-count");
     const statusMessage = document.getElementById("status-message");
+    const fitCounts = document.getElementById("fit-counts");
     const pagination = document.getElementById("pagination");
     const pageMeta = document.getElementById("page-meta");
     const prevBtn = document.getElementById("prev-page");
@@ -39,7 +46,7 @@
     const clearBtn = document.getElementById("clear-filters");
     const sourceSelect = document.getElementById("source");
 
-    const fields = ["q", "source", "location", "date_from", "date_to", "sort"];
+    const fields = ["fit", "q", "source", "location", "date_from", "date_to", "sort"];
     let debounceTimer = null;
     let currentPage = 1;
     const pageSize = 50;
@@ -58,8 +65,7 @@
     }
 
     function syncUrl(params) {
-      const next = new URL(window.location.href);
-      next.search = params.toString();
+      const next = `${window.location.pathname}?${params.toString()}`;
       window.history.replaceState({}, "", next);
     }
 
@@ -67,11 +73,15 @@
       for (const name of fields) {
         const el = form.elements.namedItem(name);
         if (!el) continue;
-        if (name === "sort") {
-          el.value = params.get(name) || "date_desc";
-        } else {
-          el.value = params.get(name) || "";
+        if (name === "fit") {
+          el.value = params.get("fit") || "recommended";
+          continue;
         }
+        if (name === "sort") {
+          el.value = params.get("sort") || "date_desc";
+          continue;
+        }
+        el.value = params.get(name) || "";
       }
       currentPage = Math.max(1, parseInt(params.get("page") || "1", 10) || 1);
     }
@@ -100,22 +110,31 @@
       sourceSelect.value = current;
     }
 
+    function renderFitCounts(counts) {
+      if (!fitCounts || !counts) return;
+      fitCounts.textContent =
+        `Recommended ${counts.recommended || 0} · Stretch ${counts.stretch || 0} · ` +
+        `Needs review ${counts.needs_review || 0} · Low fit ${counts.low_fit || 0} · ` +
+        `Eligible ${counts.all_eligible || 0}`;
+    }
+
     function renderRows(items) {
       jobsBody.innerHTML = "";
       for (const job of items) {
         const tr = document.createElement("tr");
         const detailHref = `/jobs/${encodeURIComponent(job.id)}`;
         const titleHtml = `<a href="${escapeHtml(detailHref)}">${escapeHtml(job.title)}</a>`;
-        const postingHtml = job.job_url
-          ? `<a class="posting-link" href="${escapeHtml(job.job_url)}" target="_blank" rel="noopener noreferrer">Open posting ↗</a>`
-          : `<span class="muted">Unavailable</span>`;
+        const reason = job.fit_reason
+          ? `<div class="fit-reason muted">${escapeHtml(job.fit_reason)}</div>`
+          : "";
         tr.innerHTML = `
-          <td class="title-cell" data-label="Title">${titleHtml}</td>
+          <td class="title-cell" data-label="Title">${titleHtml}${reason}</td>
           <td data-label="Company">${escapeHtml(job.company)}</td>
+          <td data-label="Fit">${fitBadge(job.fit_band, job.fit_score)}</td>
           <td data-label="Location"><span class="location-label">${escapeHtml(job.location)}</span></td>
           <td data-label="Source"><span class="source-badge">${escapeHtml(job.source_label || job.source)}</span></td>
           <td data-label="Date found">${escapeHtml(formatDate(job.date_found))}</td>
-          <td data-label="Original posting">${postingHtml}</td>
+          <td data-label="Details"><a class="btn" href="${escapeHtml(detailHref)}">Open details</a></td>
         `;
         jobsBody.appendChild(tr);
       }
@@ -150,33 +169,31 @@
           );
           return;
         }
-        if (!response.ok) {
-          throw new Error(`Request failed (${response.status})`);
-        }
+        if (!response.ok) throw new Error(`Request failed (${response.status})`);
         const data = await response.json();
         populateSources(data.available_sources, params.get("source") || "");
+        renderFitCounts(data.fit_counts);
         resultCount.textContent = `${data.total} job${data.total === 1 ? "" : "s"}`;
         renderRows(data.items || []);
         updatePagination(data);
 
         if (data.total === 0) {
-          const hasFilters = fields.some((name) => {
-            if (name === "sort") return false;
-            const el = form.elements.namedItem(name);
-            return el && String(el.value || "").trim();
-          });
-          if (hasFilters) {
+          const fit = params.get("fit") || "recommended";
+          if (fit === "recommended") {
             setStatus(
               "empty",
-              'No jobs match these filters. <button type="button" class="btn linkish" id="empty-clear">Clear filters</button>'
+              'No jobs currently meet the Recommended cutoff. <button type="button" class="btn linkish" id="include-stretch">Include Stretch jobs</button>'
             );
-            const emptyClear = document.getElementById("empty-clear");
-            if (emptyClear) emptyClear.addEventListener("click", clearFilters);
+            const stretchBtn = document.getElementById("include-stretch");
+            if (stretchBtn) {
+              stretchBtn.addEventListener("click", () => {
+                form.elements.namedItem("fit").value = "recommended_stretch";
+                currentPage = 1;
+                loadJobs();
+              });
+            }
           } else {
-            setStatus(
-              "empty",
-              "No jobs have been imported yet. Import or sync a source, then refresh this dashboard."
-            );
+            setStatus("empty", "No jobs match these filters.");
           }
         }
       } catch (_err) {
@@ -194,18 +211,12 @@
       for (const name of fields) {
         const el = form.elements.namedItem(name);
         if (!el) continue;
-        el.value = name === "sort" ? "date_desc" : "";
+        if (name === "fit") el.value = "recommended";
+        else if (name === "sort") el.value = "date_desc";
+        else el.value = "";
       }
       currentPage = 1;
       loadJobs();
-    }
-
-    function scheduleLoad() {
-      window.clearTimeout(debounceTimer);
-      debounceTimer = window.setTimeout(() => {
-        currentPage = 1;
-        loadJobs();
-      }, 300);
     }
 
     form.addEventListener("submit", (event) => {
@@ -213,12 +224,8 @@
       currentPage = 1;
       loadJobs();
     });
-
-    for (const name of ["q", "location"]) {
-      const el = form.elements.namedItem(name);
-      if (el) el.addEventListener("input", scheduleLoad);
-    }
-    for (const name of ["source", "date_from", "date_to", "sort"]) {
+    clearBtn.addEventListener("click", clearFilters);
+    for (const name of ["fit", "source", "sort"]) {
       const el = form.elements.namedItem(name);
       if (el) {
         el.addEventListener("change", () => {
@@ -227,8 +234,17 @@
         });
       }
     }
-
-    clearBtn.addEventListener("click", clearFilters);
+    for (const name of ["q", "location", "date_from", "date_to"]) {
+      const el = form.elements.namedItem(name);
+      if (!el) continue;
+      el.addEventListener("input", () => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          currentPage = 1;
+          loadJobs();
+        }, 250);
+      });
+    }
     prevBtn.addEventListener("click", () => {
       if (currentPage > 1) {
         currentPage -= 1;
@@ -247,16 +263,39 @@
   function initJobDetail() {
     const jobId = config.jobId;
     const statusMessage = document.getElementById("status-message");
-    const actionsToggle = document.getElementById("actions-toggle");
-    const actionsPanel = document.getElementById("actions-panel");
-    const generateBtn = document.getElementById("action-generate-resume");
+    const resumeBtn = document.getElementById("btn-generate-resume");
+    const coverBtn = document.getElementById("btn-generate-cover");
+    const prepareBtn = document.getElementById("btn-prepare-application");
+    const coverPlanBtn = document.getElementById("btn-view-cover-plan");
+    const coverVoice = document.getElementById("cover-voice");
     const confirmPanel = document.getElementById("confirm-panel");
+    const confirmTitle = document.getElementById("confirm-title");
     const confirmList = document.getElementById("confirm-list");
     const confirmGenerate = document.getElementById("confirm-generate");
     const cancelGenerate = document.getElementById("cancel-generate");
     const resultPanel = document.getElementById("result-panel");
     const resultBody = document.getElementById("result-body");
-    let previewData = null;
+    const coverPlanPanel = document.getElementById("cover-plan-panel");
+    const coverPlanBody = document.getElementById("cover-plan-body");
+    const generationControls = document.getElementById("generation-controls");
+    const eligibilityNote = document.getElementById("generation-eligibility-note");
+    const fitWarning = document.getElementById("fit-generation-warning");
+    const fitBreakdownPanel = document.getElementById("fit-breakdown-panel");
+    const fitBreakdownBody = document.getElementById("fit-breakdown-body");
+    const applicationPanel = document.getElementById("application-panel");
+    const applicationBody = document.getElementById("application-body");
+    const applicationActions = document.getElementById("application-actions");
+    const btnAppOpen = document.getElementById("btn-app-open");
+    const btnAppReveal = document.getElementById("btn-app-reveal");
+    const btnAppSubmitted = document.getElementById("btn-app-submitted");
+    const btnAppNeeds = document.getElementById("btn-app-needs");
+    const btnAppCancel = document.getElementById("btn-app-cancel");
+
+    let pendingAction = null;
+    let detailData = null;
+    let inFlight = false;
+    let activeAttemptId = null;
+    let preparePreviewData = null;
 
     function setStatus(kind, html) {
       if (!html) {
@@ -270,21 +309,106 @@
       statusMessage.innerHTML = html;
     }
 
-    function closeActions() {
-      actionsPanel.hidden = true;
-      actionsToggle.setAttribute("aria-expanded", "false");
+    function selectedVoice() {
+      return (coverVoice && coverVoice.value) || "technical_direct";
     }
 
-    actionsToggle.addEventListener("click", () => {
-      const open = actionsPanel.hidden;
-      actionsPanel.hidden = !open;
-      actionsToggle.setAttribute("aria-expanded", open ? "true" : "false");
-    });
+    function setBusy(busy) {
+      inFlight = busy;
+      if (resumeBtn) resumeBtn.disabled = busy || !(detailData && detailData.resume_generation && detailData.resume_generation.available);
+      if (coverBtn) coverBtn.disabled = busy || !(detailData && detailData.cover_letter_generation && detailData.cover_letter_generation.available);
+      if (prepareBtn) prepareBtn.disabled = busy;
+      if (confirmGenerate) confirmGenerate.disabled = busy;
+    }
 
-    document.addEventListener("click", (event) => {
-      const menu = document.getElementById("actions-menu");
-      if (menu && !menu.contains(event.target)) closeActions();
-    });
+    function formatUnresolved(item) {
+      if (!item || typeof item !== "object") return String(item || "");
+      if (item.kind === "sensitive_question_category") {
+        return `Answer manually on employer form: ${item.category || "sensitive question"}`;
+      }
+      if (item.kind === "final_submission") {
+        return "Final submission stays manual — Ganesha never clicks Submit.";
+      }
+      if (item.action) return String(item.action);
+      return JSON.stringify(item);
+    }
+
+    function renderAttempt(attempt) {
+      if (!applicationPanel || !applicationBody) return;
+      activeAttemptId = attempt.attempt_id;
+      applicationPanel.hidden = false;
+      const terminal = ["cancelled", "submitted_user_confirmed", "failed"].includes(
+        attempt.status
+      );
+      if (applicationActions) applicationActions.hidden = terminal;
+      const resume = (attempt.package && attempt.package.resume) || {};
+      const cover = (attempt.package && attempt.package.cover_letter) || null;
+      const unresolved = (attempt.unresolved || [])
+        .slice(0, 8)
+        .map((item) => `<li>${escapeHtml(formatUnresolved(item))}</li>`)
+        .join("");
+      applicationBody.innerHTML = `
+        <ul class="result-list">
+          <li><strong>${escapeHtml(attempt.company || "")}</strong> — ${escapeHtml(attempt.role || "")}</li>
+          <li>Status: <strong>${escapeHtml(attempt.status || "")}</strong></li>
+          <li>Mode: Chrome + Simplify assisted handoff (not automatic Ganesha autofill)</li>
+          <li>Application URL: <code>${escapeHtml(attempt.application_url || "")}</code></li>
+          <li>Resume: <code>${escapeHtml(resume.pdf_path || resume.docx_path || "missing")}</code>
+            ${resume.validation_ok ? "(validated)" : ""}</li>
+          <li>Cover letter: ${
+            attempt.include_cover_letter && cover
+              ? `<code>${escapeHtml(cover.pdf_path || cover.docx_path || "")}</code>`
+              : "optional — not included"
+          }</li>
+          <li>Simplify: user-invoked in your Chrome profile; Ganesha cannot observe completion.</li>
+        </ul>
+        <p class="muted">Sensitive employer questions require your explicit answers on the form.</p>
+        ${unresolved ? `<ul class="result-list">${unresolved}</ul>` : ""}
+      `;
+    }
+
+    function renderFit(fit) {
+      const el = document.getElementById("job-fit");
+      if (!el) return;
+      if (!fit || !fit.band) {
+        el.textContent = "Not assessed yet. Run jobs reassess-fit.";
+        return;
+      }
+      el.innerHTML = `${fitBadge(fit.band, fit.score)} <span class="muted">${escapeHtml(fit.short_reason || "")}</span>`;
+      if (fit.requirements && fit.requirements.length) {
+        fitBreakdownPanel.hidden = false;
+        fitBreakdownBody.innerHTML = `<ul class="result-list">${fit.requirements
+          .slice(0, 8)
+          .map(
+            (req) =>
+              `<li><strong>${escapeHtml(req.evidence_status)}</strong> (${escapeHtml(req.classification)}): ${escapeHtml(req.requirement)} — ${escapeHtml(req.explanation || "")}</li>`
+          )
+          .join("")}</ul>`;
+      }
+      if (fit.band === "low_fit" || fit.band === "stretch") {
+        fitWarning.hidden = false;
+        fitWarning.textContent =
+          fit.band === "low_fit"
+            ? "This job is low fit. Generation is still allowed if eligibility passes, but review the gap first."
+            : "This job is a stretch match. Generation is allowed; review the gap before using the documents.";
+      }
+    }
+
+    function applyGenerationAvailability(data) {
+      generationControls.hidden = false;
+      const resume = data.resume_generation || {};
+      const cover = data.cover_letter_generation || {};
+      resumeBtn.disabled = !resume.available;
+      coverBtn.disabled = !cover.available;
+      const notes = [];
+      if (!resume.available && resume.block_reason) {
+        notes.push(`Resume: ${resume.block_reason}`);
+      }
+      if (!cover.available && cover.block_reason) {
+        notes.push(`Cover letter: ${cover.block_reason}`);
+      }
+      eligibilityNote.textContent = notes.join(" ");
+    }
 
     async function loadDetail() {
       try {
@@ -302,6 +426,7 @@
         }
         if (!response.ok) throw new Error("load failed");
         const data = await response.json();
+        detailData = data;
         const job = data.job || {};
         document.getElementById("job-title").textContent = job.title || "Untitled";
         document.getElementById("job-company").textContent = job.company || "";
@@ -325,6 +450,8 @@
           warn.textContent =
             "Job description looks incomplete. Tailoring quality may be limited.";
         }
+        renderFit(data.fit || {});
+        applyGenerationAvailability(data);
       } catch (_err) {
         setStatus(
           "error",
@@ -333,44 +460,21 @@
       }
     }
 
-    generateBtn.addEventListener("click", async () => {
-      closeActions();
-      resultPanel.hidden = true;
-      setStatus("", "");
+    async function openResumeConfirm() {
+      pendingAction = "resume";
+      confirmTitle.textContent = "Confirm resume generation";
       confirmGenerate.disabled = true;
       confirmList.innerHTML = "<li>Loading preview…</li>";
       confirmPanel.hidden = false;
+      resultPanel.hidden = true;
       try {
         const response = await fetch(
           `/api/jobs/${encodeURIComponent(jobId)}/resume/preview`
         );
-        previewData = await response.json();
+        const previewData = await response.json();
         if (!response.ok) {
           confirmList.innerHTML = `<li>${escapeHtml(previewData.error || "Preview failed")}</li>`;
           return;
-        }
-        const providerLabel =
-          previewData.provider === "deterministic"
-            ? "Deterministic only"
-            : `Semantic provider (${escapeHtml(previewData.provider)})`;
-        const items = [
-          `<strong>${escapeHtml(previewData.title || "")}</strong> at ${escapeHtml(previewData.company || "Unknown")}`,
-          `Recommended track: <strong>${escapeHtml(previewData.track || "")}</strong>`,
-          `Verified source evidence: ${escapeHtml(String(previewData.evidence_count || 0))} facts`,
-          `Strategy mode: ${providerLabel}`,
-        ];
-        if (previewData.insufficient_description) {
-          items.push(
-            '<span class="warn-text">Warning: job description is incomplete.</span>'
-          );
-        }
-        if (previewData.warnings && previewData.warnings.length) {
-          for (const w of previewData.warnings.slice(0, 3)) {
-            items.push(`<span class="warn-text">${escapeHtml(w)}</span>`);
-          }
-        }
-        if (previewData.block_reason) {
-          items.push(`<span class="warn-text">${escapeHtml(previewData.block_reason)}</span>`);
         }
         if (previewData.status === "blocked" || previewData.block_reason) {
           confirmList.innerHTML = `<li><span class="warn-text">${escapeHtml(
@@ -378,75 +482,347 @@
               "Resume generation is unavailable because this job does not meet your configured eligibility policy."
           )}</span></li>`;
           confirmGenerate.disabled = true;
-        } else {
-          confirmList.innerHTML = items.map((i) => `<li>${i}</li>`).join("");
-          confirmGenerate.disabled = !previewData.can_generate;
+          return;
         }
+        const items = [
+          `<strong>${escapeHtml(previewData.title || "")}</strong> at ${escapeHtml(previewData.company || "Unknown")}`,
+          `Recommended track: <strong>${escapeHtml(previewData.track || "")}</strong>`,
+          `Verified source evidence: ${escapeHtml(String(previewData.evidence_count || 0))} facts`,
+        ];
+        if (detailData && detailData.fit && detailData.fit.band) {
+          items.push(
+            `Fit: ${escapeHtml(detailData.fit.band)} (${escapeHtml(String(detailData.fit.score ?? ""))}) — ${escapeHtml(detailData.fit.short_reason || "")}`
+          );
+        }
+        confirmList.innerHTML = items.map((i) => `<li>${i}</li>`).join("");
+        confirmGenerate.disabled = !previewData.can_generate;
       } catch (_err) {
         confirmList.innerHTML = "<li>Could not load generation preview.</li>";
       }
+    }
+
+    async function openCoverConfirm() {
+      pendingAction = "cover";
+      confirmTitle.textContent = "Confirm cover-letter generation";
+      confirmList.innerHTML = `
+        <li>Generate a cover letter for this job using verified evidence.</li>
+        <li>Voice: <strong>${escapeHtml(selectedVoice())}</strong></li>
+        <li>Missing company research will not block a job-description-based letter.</li>
+      `;
+      if (detailData && detailData.fit && (detailData.fit.band === "low_fit" || detailData.fit.band === "stretch")) {
+        confirmList.innerHTML += `<li><span class="warn-text">${escapeHtml(detailData.fit.short_reason || "Fit warning")}</span></li>`;
+      }
+      confirmGenerate.disabled = false;
+      confirmPanel.hidden = false;
+      resultPanel.hidden = true;
+    }
+
+    resumeBtn.addEventListener("click", () => {
+      if (inFlight || resumeBtn.disabled) return;
+      openResumeConfirm();
     });
+    coverBtn.addEventListener("click", () => {
+      if (inFlight || coverBtn.disabled) return;
+      openCoverConfirm();
+    });
+
+    async function openPrepareConfirm() {
+      pendingAction = "prepare";
+      confirmTitle.textContent = "Prepare application";
+      confirmGenerate.disabled = true;
+      confirmList.innerHTML = "<li>Loading preparation preview…</li>";
+      confirmPanel.hidden = false;
+      resultPanel.hidden = true;
+      try {
+        const response = await fetch(
+          `/api/jobs/${encodeURIComponent(jobId)}/application/prepare-preview`
+        );
+        const data = await response.json();
+        preparePreviewData = data;
+        if (!response.ok) {
+          confirmList.innerHTML = `<li>${escapeHtml(data.error || "Preview failed")}</li>`;
+          return;
+        }
+        const items = [
+          `<strong>${escapeHtml(data.company || "")}</strong> — ${escapeHtml(data.role || "")}`,
+          `Destination: <code>${escapeHtml(data.application_url || "missing")}</code>`,
+          `Resume: ${
+            data.resume
+              ? `<code>${escapeHtml(data.resume.pdf_path || data.resume.docx_path || "")}</code> (reuse)`
+              : "<span class='warn-text'>Generate a job-specific resume first</span>"
+          }`,
+          `Cover letter: optional${
+            data.cover_letter
+              ? ` — available stamp ${escapeHtml(data.cover_letter.stamp || "")}`
+              : " — none on file"
+          }`,
+          `Mode: Chrome + Simplify assisted handoff (Ganesha does not control Simplify)`,
+        ];
+        if (data.fit_warning) {
+          items.push(`<span class="warn-text">Fit warning: ${escapeHtml(data.fit_warning)}</span>`);
+        }
+        if (data.block_reason) {
+          items.push(`<span class="warn-text">${escapeHtml(data.block_reason)}</span>`);
+        }
+        if ((data.active_attempts || []).length) {
+          items.push(
+            `<span class="warn-text">Active attempt exists (${escapeHtml(
+              data.active_attempts[0].attempt_id
+            )}). Confirming will force a new attempt.</span>`
+          );
+        }
+        (data.simplify_limits || []).slice(0, 3).forEach((line) => {
+          items.push(escapeHtml(line));
+        });
+        confirmList.innerHTML = items.map((i) => `<li>${i}</li>`).join("");
+        confirmList.innerHTML += `
+          <li><label><input type="checkbox" id="prep-include-cover"> Include optional cover letter</label></li>
+          <li><label><input type="checkbox" id="prep-ack-fit" ${
+            data.fit_warning ? "" : "checked"
+          }> Acknowledge fit warning / proceed</label></li>
+        `;
+        confirmGenerate.disabled = !data.can_prepare;
+        confirmGenerate.textContent = "Prepare";
+      } catch (_err) {
+        confirmList.innerHTML = "<li>Could not load application preview.</li>";
+      }
+    }
+
+    if (prepareBtn) {
+      prepareBtn.addEventListener("click", () => {
+        if (inFlight) return;
+        openPrepareConfirm();
+      });
+    }
 
     cancelGenerate.addEventListener("click", () => {
       confirmPanel.hidden = true;
-      previewData = null;
+      pendingAction = null;
+      confirmGenerate.textContent = "Generate";
     });
 
     confirmGenerate.addEventListener("click", async () => {
-      if (!previewData || !previewData.can_generate) return;
-      confirmGenerate.disabled = true;
-      setStatus("empty", "Generating tailored resume…");
+      if (!pendingAction || inFlight) return;
+      setBusy(true);
+      if (pendingAction === "prepare") {
+        setStatus("empty", "Preparing application package…");
+      } else {
+        setStatus("empty", pendingAction === "resume" ? "Generating tailored resume…" : "Generating tailored cover letter…");
+      }
+      try {
+        let response;
+        if (pendingAction === "prepare") {
+          const includeCover = !!(document.getElementById("prep-include-cover") || {}).checked;
+          const ackFit = !!(document.getElementById("prep-ack-fit") || {}).checked;
+          const forceNew = !!(preparePreviewData && (preparePreviewData.active_attempts || []).length);
+          response = await fetch(
+            `/api/jobs/${encodeURIComponent(jobId)}/application/prepare`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                confirm: true,
+                include_cover_letter: includeCover,
+                acknowledge_fit_warning: ackFit || !(preparePreviewData && preparePreviewData.fit_warning),
+                force_new: forceNew,
+              }),
+            }
+          );
+        } else if (pendingAction === "resume") {
+          response = await fetch(
+            `/api/jobs/${encodeURIComponent(jobId)}/resume/generate`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                confirm: true,
+                deterministic_only: false,
+              }),
+            }
+          );
+        } else {
+          response = await fetch(
+            `/api/jobs/${encodeURIComponent(jobId)}/cover-letter/generate`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                confirm: true,
+                voice: selectedVoice(),
+                deterministic_only: false,
+              }),
+            }
+          );
+        }
+        const data = await response.json();
+        confirmPanel.hidden = true;
+        confirmGenerate.textContent = "Generate";
+        if (pendingAction === "prepare") {
+          if (data.status === "prepared" && data.attempt) {
+            setStatus("empty", "Application package prepared.");
+            renderAttempt(data.attempt);
+          } else {
+            setStatus("error", escapeHtml(data.error || "Preparation failed."));
+            if (applicationPanel) {
+              applicationPanel.hidden = false;
+              applicationBody.innerHTML = `<p>${escapeHtml(data.error || "Preparation failed.")}</p>`;
+            }
+          }
+        } else {
+          resultPanel.hidden = false;
+          if (data.status === "succeeded") {
+            setStatus(
+              "empty",
+              pendingAction === "resume"
+                ? "Resume generated successfully."
+                : "Cover letter generated"
+            );
+            if (pendingAction === "resume") {
+              resultBody.innerHTML = `
+                <ul class="result-list">
+                  <li>DOCX generated</li>
+                  <li>One-page PDF generated</li>
+                  <li>Internal DOCX: <code>${escapeHtml(data.docx_path || "")}</code></li>
+                  <li>Internal PDF: <code>${escapeHtml(data.pdf_path || "")}</code></li>
+                  <li>Desktop PDF: <code>${escapeHtml(data.desktop_pdf_path || "")}</code></li>
+                  <li>Track: ${escapeHtml(data.track || "")}</li>
+                </ul>
+              `;
+            } else {
+              resultBody.innerHTML = `
+                <ul class="result-list">
+                  <li>Cover letter generated</li>
+                  <li>Voice: ${escapeHtml(data.voice || "")}</li>
+                  <li>Selected evidence: ${escapeHtml(String(data.evidence_count || 0))}</li>
+                  <li>Company evidence used: ${data.company_evidence_used ? "yes" : "no"}</li>
+                  <li>Internal DOCX: <code>${escapeHtml(data.docx_path || "")}</code></li>
+                  <li>Internal PDF: <code>${escapeHtml(data.pdf_path || "")}</code></li>
+                  <li>Desktop PDF: <code>${escapeHtml(data.desktop_pdf_path || "")}</code></li>
+                </ul>
+              `;
+            }
+          } else {
+            setStatus("error", escapeHtml(data.error || "Generation failed."));
+            resultBody.innerHTML = `<p>${escapeHtml(data.error || "Generation failed.")}</p>`;
+          }
+        }
+      } catch (_err) {
+        setStatus("error", "Request failed.");
+      } finally {
+        pendingAction = null;
+        setBusy(false);
+      }
+    });
+
+    async function attemptAction(path, successMessage) {
+      if (!activeAttemptId || inFlight) return;
+      setBusy(true);
       try {
         const response = await fetch(
-          `/api/jobs/${encodeURIComponent(jobId)}/resume/generate`,
+          `/api/application-attempts/${encodeURIComponent(activeAttemptId)}${path}`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              confirm: true,
-              track: previewData.track,
-              deterministic_only: previewData.provider === "deterministic",
-            }),
+            body: JSON.stringify({ confirm: true }),
           }
         );
         const data = await response.json();
-        confirmPanel.hidden = true;
-        resultPanel.hidden = false;
-        if (data.status === "succeeded") {
-          setStatus("empty", "Resume generated successfully.");
-          const gapsHtml =
-            data.gaps && data.gaps.length
-              ? `<details class="gaps-details"><summary>Warnings / gaps (${data.gaps.length})</summary><ul>${data.gaps
-                  .map((g) => `<li>${escapeHtml(g)}</li>`)
-                  .join("")}</ul></details>`
-              : "";
-          resultBody.innerHTML = `
-            <ul class="result-list">
-              <li>DOCX generated</li>
-              <li>One-page PDF generated</li>
-              <li>Internal DOCX: <code>${escapeHtml(data.docx_path || "")}</code></li>
-              <li>Internal PDF: <code>${escapeHtml(data.pdf_path || "")}</code></li>
-              <li>Desktop PDF: <code>${escapeHtml(data.desktop_pdf_path || "")}</code></li>
-              <li>Track: ${escapeHtml(data.track || "")}</li>
-              <li>Sources: ${escapeHtml((data.source_files || []).join(", "))}</li>
-              <li>Provider: ${escapeHtml(data.provider || "")}</li>
-            </ul>
-            ${gapsHtml}
-          `;
+        if (!response.ok) {
+          setStatus("error", escapeHtml(data.error || "Action failed."));
+          return;
+        }
+        if (data.attempt) renderAttempt(data.attempt);
+        if (data.instructions) {
+          setStatus(
+            "empty",
+            escapeHtml(successMessage) +
+              " " +
+              escapeHtml((data.instructions || []).slice(0, 1).join(" "))
+          );
         } else {
-          setStatus("error", escapeHtml(data.error || "Generation failed."));
-          const msgs = (data.validation && data.validation.messages) || [];
-          resultBody.innerHTML = `
-            <p>Generation did not succeed. Invalid PDFs are not copied to Desktop.</p>
-            <ul>${msgs.map((m) => `<li>${escapeHtml(m)}</li>`).join("")}</ul>
-          `;
+          setStatus("empty", escapeHtml(successMessage));
+        }
+        if (data.simplify_handoff) {
+          setStatus(
+            "empty",
+            "Opened in Chrome. Invoke Simplify yourself if installed, review answers, then confirm submission here. Ganesha did not submit."
+          );
         }
       } catch (_err) {
-        setStatus("error", "Generation request failed.");
+        setStatus("error", "Action request failed.");
       } finally {
-        confirmGenerate.disabled = false;
+        setBusy(false);
       }
-    });
+    }
+
+    if (btnAppOpen) {
+      btnAppOpen.addEventListener("click", () =>
+        attemptAction("/open", "Chrome handoff requested.")
+      );
+    }
+    if (btnAppReveal) {
+      btnAppReveal.addEventListener("click", () =>
+        attemptAction("/reveal-documents", "Revealed selected documents locally.")
+      );
+    }
+    if (btnAppSubmitted) {
+      btnAppSubmitted.addEventListener("click", () => {
+        if (
+          !window.confirm(
+            "Confirm only if you already submitted the employer form yourself. Ganesha never submits automatically."
+          )
+        ) {
+          return;
+        }
+        attemptAction("/mark-submitted", "Marked submitted (user-confirmed).");
+      });
+    }
+    if (btnAppNeeds) {
+      btnAppNeeds.addEventListener("click", () =>
+        attemptAction("/mark-needs-action", "Marked needs action.")
+      );
+    }
+    if (btnAppCancel) {
+      btnAppCancel.addEventListener("click", () =>
+        attemptAction("/cancel", "Attempt cancelled.")
+      );
+    }
+
+    if (coverPlanBtn) {
+      coverPlanBtn.addEventListener("click", async () => {
+        coverPlanPanel.hidden = false;
+        coverPlanBody.innerHTML = "<p>Loading cover-letter plan…</p>";
+        try {
+          const response = await fetch(
+            `/api/jobs/${encodeURIComponent(jobId)}/cover-letter/plan?voice=${encodeURIComponent(selectedVoice())}`
+          );
+          const data = await response.json();
+          if (!response.ok) {
+            coverPlanBody.innerHTML = `<p>${escapeHtml(data.error || "Plan unavailable.")}</p>`;
+            return;
+          }
+          const primary = data.primary ? data.primary.label : "none";
+          const secondary = data.secondary ? data.secondary.label : "none";
+          const companyCount = (data.company_evidence || []).length;
+          const warnings = (data.warnings || [])
+            .map((warning) => `<li>${escapeHtml(warning)}</li>`)
+            .join("");
+          coverPlanBody.innerHTML = `
+            <ul class="result-list">
+              <li>Role: ${escapeHtml(data.role || "")}</li>
+              <li>Company: ${escapeHtml(data.company || "")}</li>
+              <li>Voice: ${escapeHtml(data.voice || "")}</li>
+              <li>Primary evidence: ${escapeHtml(primary)}</li>
+              <li>Secondary evidence: ${escapeHtml(secondary)}</li>
+              <li>Official company evidence: ${companyCount}</li>
+            </ul>
+            ${warnings ? `<ul>${warnings}</ul>` : ""}
+          `;
+        } catch (_err) {
+          coverPlanBody.innerHTML = "<p>Could not load the cover-letter plan.</p>";
+        }
+      });
+    }
 
     loadDetail();
   }

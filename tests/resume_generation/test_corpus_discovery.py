@@ -17,3 +17,8 @@ def test_discovery_ignores_pdf_temp_and_non_docx(tmp_path: Path) -> None:
     assert "notes.txt" not in names
     assert summary.discovered == len(files)
     assert summary.skipped >= 3
+    cover = root / "Cover Letters" / "Alex_Michael_Manjakunnel_Cover.docx"
+    cover.parent.mkdir(parents=True, exist_ok=True)
+    cover.write_bytes(b"not-a-real-docx")
+    files_after, _summary_after = discover_docx_files(root)
+    assert cover.name not in {path.name for path in files_after}

@@ -8,6 +8,11 @@ from docx.shared import Inches, Pt
 
 from apps.resume_generation.paths import TEMPLATE_VERSION
 from apps.resume_generation.schemas import ResumeDocument
+from apps.resume_generation.services.experience_layout import (
+    RIGHT_TAB_INCHES,
+    add_left_right_row,
+    split_employer_location,
+)
 
 
 def render_docx(doc: ResumeDocument, output_path: Path) -> Path:
@@ -77,12 +82,22 @@ def render_docx(doc: ResumeDocument, output_path: Path) -> Path:
     if doc.experience:
         add_heading("Experience")
         for exp_entry in doc.experience:
-            header = " | ".join(
-                part
-                for part in (exp_entry.company, exp_entry.title, exp_entry.dates)
-                if part
+            company, inferred_location = split_employer_location(exp_entry.company)
+            location = (exp_entry.location or inferred_location or "").strip() or None
+            add_left_right_row(
+                document,
+                company,
+                location,
+                bold=True,
+                right_tab_inches=RIGHT_TAB_INCHES,
             )
-            add_body(header, bold=True)
+            add_left_right_row(
+                document,
+                exp_entry.title or "",
+                exp_entry.dates or None,
+                bold=False,
+                right_tab_inches=RIGHT_TAB_INCHES,
+            )
             for bullet in exp_entry.bullets:
                 add_bullet(bullet.text)
 

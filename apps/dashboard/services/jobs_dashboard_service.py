@@ -8,6 +8,8 @@ from sqlalchemy import ColumnElement, func, or_, text
 from sqlalchemy.orm import Query, Session, joinedload
 
 from apps.dashboard.schemas import (
+    FitBandCounts,
+    FitFeedFilter,
     JobDashboardItem,
     JobQueryParams,
     JobSort,
@@ -16,6 +18,18 @@ from apps.dashboard.schemas import (
 )
 from packages.core.domain.models import Company, JobPosting
 from packages.core.services.job_display import source_display_label
+from packages.core.services.job_eligibility import (
+    ELIGIBILITY_ACTIONABLE,
+    ELIGIBILITY_EXCLUDED,
+    resolve_job_eligibility,
+)
+from packages.core.services.evidence_fit_service import (
+    BAND_LOW_FIT,
+    BAND_NEEDS_REVIEW,
+    BAND_RECOMMENDED,
+    BAND_STRETCH,
+    get_stored_fit,
+)
 
 
 def job_url_for(job: JobPosting) -> str | None:
@@ -49,6 +63,8 @@ def source_value_for(job: JobPosting) -> str:
 
 def to_dashboard_item(job: JobPosting) -> JobDashboardItem:
     source_value = source_value_for(job)
+    fit = get_stored_fit(job) or {}
+    eligibility = resolve_job_eligibility(job)
     return JobDashboardItem(
         id=job.id,
         title=job.title,
@@ -62,6 +78,11 @@ def to_dashboard_item(job: JobPosting) -> JobDashboardItem:
         created_at=job.created_at,
         job_url=job_url_for(job),
         status=job.status,
+        fit_band=fit.get("band"),
+        fit_score=fit.get("score"),
+        fit_reason=fit.get("short_reason"),
+        fit_confidence=fit.get("confidence"),
+        eligibility=eligibility.result,
     )
 
 
@@ -122,6 +143,7 @@ def _apply_sort(query: Query[Any], sort: JobSort) -> Query[Any]:
         JobSort.location_desc: (location_val.desc(), JobPosting.id.asc()),
         JobSort.source_asc: (source_val.asc(), JobPosting.id.asc()),
         JobSort.source_desc: (source_val.desc(), JobPosting.id.asc()),
+        JobSort.fit_desc: (date_found_expr.desc(), JobPosting.id.asc()),
     }
     primary, secondary = order_map[sort]
     return query.order_by(primary, secondary)
@@ -150,16 +172,57 @@ def list_available_sources(session: Session) -> list[SourceOption]:
     return options
 
 
-def list_dashboard_jobs(session: Session, params: JobQueryParams) -> JobsListResponse:
-    """Return every stored job matching filters (no actionable-queue exclusions)."""
-    count_q: Query[Any] = session.query(func.count(JobPosting.id)).outerjoin(
-        Company, JobPosting.company_id == Company.id
-    )
-    count_q = _apply_filters(count_q, params)
-    total = int(count_q.scalar() or 0)
-    total_pages = max(1, ceil(total / params.page_size)) if total else 0
-    page = min(params.page, total_pages) if total_pages else 1
+def _matches_fit_filter(job: JobPosting, fit: FitFeedFilter) -> bool:
+    eligibility = resolve_job_eligibility(job)
+    if fit != FitFeedFilter.all and eligibility.result == ELIGIBILITY_EXCLUDED:
+        return False
+    band = (get_stored_fit(job) or {}).get("band")
+    if fit == FitFeedFilter.all:
+        return True
+    if fit == FitFeedFilter.all_eligible:
+        return eligibility.result == ELIGIBILITY_ACTIONABLE
+    if fit == FitFeedFilter.recommended:
+        return (
+            eligibility.result == ELIGIBILITY_ACTIONABLE
+            and band == BAND_RECOMMENDED
+        )
+    if fit == FitFeedFilter.recommended_stretch:
+        return eligibility.result == ELIGIBILITY_ACTIONABLE and band in {
+            BAND_RECOMMENDED,
+            BAND_STRETCH,
+        }
+    if fit == FitFeedFilter.needs_review:
+        return band == BAND_NEEDS_REVIEW or band is None
+    if fit == FitFeedFilter.low_fit:
+        return band == BAND_LOW_FIT
+    return True
 
+
+def compute_fit_counts(jobs: list[JobPosting]) -> FitBandCounts:
+    counts = FitBandCounts()
+    for job in jobs:
+        eligibility = resolve_job_eligibility(job)
+        if eligibility.result == ELIGIBILITY_ACTIONABLE:
+            counts.all_eligible += 1
+        if eligibility.result == ELIGIBILITY_EXCLUDED:
+            continue
+        band = (get_stored_fit(job) or {}).get("band")
+        if band == BAND_RECOMMENDED:
+            counts.recommended += 1
+        elif band == BAND_STRETCH:
+            counts.stretch += 1
+        elif band == BAND_NEEDS_REVIEW:
+            counts.needs_review += 1
+        elif band == BAND_LOW_FIT:
+            counts.low_fit += 1
+        else:
+            counts.unscored += 1
+            counts.needs_review += 1
+    return counts
+
+
+def list_dashboard_jobs(session: Session, params: JobQueryParams) -> JobsListResponse:
+    """Return jobs matching filters. Fit bands are separate from eligibility."""
     list_q: Query[Any] = (
         session.query(JobPosting)
         .outerjoin(Company, JobPosting.company_id == Company.id)
@@ -167,16 +230,30 @@ def list_dashboard_jobs(session: Session, params: JobQueryParams) -> JobsListRes
     )
     list_q = _apply_filters(list_q, params)
     list_q = _apply_sort(list_q, params.sort)
+    all_rows = list_q.all()
+    fit_counts = compute_fit_counts(all_rows)
+    filtered = [job for job in all_rows if _matches_fit_filter(job, params.fit)]
+    if params.sort == JobSort.fit_desc:
+        filtered.sort(
+            key=lambda job: int((get_stored_fit(job) or {}).get("score") or -1),
+            reverse=True,
+        )
+
+    total = len(filtered)
+    total_pages = max(1, ceil(total / params.page_size)) if total else 0
+    page = min(params.page, total_pages) if total_pages else 1
     offset = (page - 1) * params.page_size
-    rows = list_q.offset(offset).limit(params.page_size).all()
+    page_rows = filtered[offset : offset + params.page_size]
 
     return JobsListResponse(
-        items=[to_dashboard_item(job) for job in rows],
+        items=[to_dashboard_item(job) for job in page_rows],
         page=page,
         page_size=params.page_size,
         total=total,
         total_pages=int(total_pages),
         available_sources=list_available_sources(session),
+        fit_counts=fit_counts,
+        fit_filter=params.fit.value,
     )
 
 
