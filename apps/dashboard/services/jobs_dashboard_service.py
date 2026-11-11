@@ -14,6 +14,8 @@ from apps.dashboard.schemas import (
     JobQueryParams,
     JobSort,
     JobsListResponse,
+    RecencyCounts,
+    RecencyFilter,
     SourceOption,
 )
 from packages.core.domain.models import Company, JobPosting
@@ -29,6 +31,17 @@ from packages.core.services.evidence_fit_service import (
     BAND_RECOMMENDED,
     BAND_STRETCH,
     get_stored_fit,
+)
+from packages.core.services.job_recency import (
+    RecencyWindow,
+    first_seen_at,
+    is_within_window,
+    job_recency_payload,
+    recency_counts,
+)
+from packages.core.services.job_refresh_service import (
+    get_refresh_status,
+    stale_threshold_hours,
 )
 
 
@@ -61,10 +74,22 @@ def source_value_for(job: JobPosting) -> str:
     return (job.source_name or job.source or "unknown").strip() or "unknown"
 
 
-def to_dashboard_item(job: JobPosting) -> JobDashboardItem:
+def to_dashboard_item(
+    job: JobPosting,
+    *,
+    last_refresh_started_at: datetime | None = None,
+) -> JobDashboardItem:
     source_value = source_value_for(job)
     fit = get_stored_fit(job) or {}
     eligibility = resolve_job_eligibility(job)
+    recency = job_recency_payload(job)
+    is_new = False
+    if last_refresh_started_at is not None:
+        is_new = is_within_window(
+            job,
+            RecencyWindow.new_since_refresh,
+            last_refresh_started_at=last_refresh_started_at,
+        )
     return JobDashboardItem(
         id=job.id,
         title=job.title,
@@ -83,6 +108,10 @@ def to_dashboard_item(job: JobPosting) -> JobDashboardItem:
         fit_reason=fit.get("short_reason"),
         fit_confidence=fit.get("confidence"),
         eligibility=eligibility.result,
+        recency_at=recency.get("recency_at"),
+        recency_label=recency.get("recency_label"),
+        first_seen_at=first_seen_at(job),
+        is_new_since_refresh=is_new,
     )
 
 
@@ -221,8 +250,44 @@ def compute_fit_counts(jobs: list[JobPosting]) -> FitBandCounts:
     return counts
 
 
+def _recency_window(recency: RecencyFilter) -> RecencyWindow:
+    return RecencyWindow(recency.value)
+
+
+def _matches_recency_filter(
+    job: JobPosting,
+    recency: RecencyFilter,
+    *,
+    last_refresh_started_at: datetime | None,
+) -> bool:
+    return is_within_window(
+        job,
+        _recency_window(recency),
+        last_refresh_started_at=last_refresh_started_at,
+    )
+
+
+def _to_recency_counts(raw: dict[str, int]) -> RecencyCounts:
+    return RecencyCounts(
+        hours_24=raw.get("24h", 0),
+        days_3=raw.get("3d", 0),
+        days_7=raw.get("7d", 0),
+        all=raw.get("all", 0),
+        new_since_refresh=raw.get("new_since_refresh", 0),
+    )
+
+
 def list_dashboard_jobs(session: Session, params: JobQueryParams) -> JobsListResponse:
     """Return jobs matching filters. Fit bands are separate from eligibility."""
+    refresh_meta = get_refresh_status(session)
+    last_refresh_raw = refresh_meta.get("last_refresh_started_at")
+    last_refresh_started_at: datetime | None = None
+    if last_refresh_raw:
+        try:
+            last_refresh_started_at = datetime.fromisoformat(last_refresh_raw)
+        except ValueError:
+            last_refresh_started_at = None
+
     list_q: Query[Any] = (
         session.query(JobPosting)
         .outerjoin(Company, JobPosting.company_id == Company.id)
@@ -232,7 +297,17 @@ def list_dashboard_jobs(session: Session, params: JobQueryParams) -> JobsListRes
     list_q = _apply_sort(list_q, params.sort)
     all_rows = list_q.all()
     fit_counts = compute_fit_counts(all_rows)
-    filtered = [job for job in all_rows if _matches_fit_filter(job, params.fit)]
+    fit_filtered = [job for job in all_rows if _matches_fit_filter(job, params.fit)]
+    raw_recency = recency_counts(
+        fit_filtered, last_refresh_started_at=last_refresh_started_at
+    )
+    filtered = [
+        job
+        for job in fit_filtered
+        if _matches_recency_filter(
+            job, params.recency, last_refresh_started_at=last_refresh_started_at
+        )
+    ]
     if params.sort == JobSort.fit_desc:
         filtered.sort(
             key=lambda job: int((get_stored_fit(job) or {}).get("score") or -1),
@@ -245,8 +320,19 @@ def list_dashboard_jobs(session: Session, params: JobQueryParams) -> JobsListRes
     offset = (page - 1) * params.page_size
     page_rows = filtered[offset : offset + params.page_size]
 
+    last_refreshed = None
+    overall = refresh_meta.get("overall_last_refreshed")
+    if overall:
+        try:
+            last_refreshed = datetime.fromisoformat(overall)
+        except ValueError:
+            last_refreshed = None
+
     return JobsListResponse(
-        items=[to_dashboard_item(job) for job in page_rows],
+        items=[
+            to_dashboard_item(job, last_refresh_started_at=last_refresh_started_at)
+            for job in page_rows
+        ],
         page=page,
         page_size=params.page_size,
         total=total,
@@ -254,6 +340,11 @@ def list_dashboard_jobs(session: Session, params: JobQueryParams) -> JobsListRes
         available_sources=list_available_sources(session),
         fit_counts=fit_counts,
         fit_filter=params.fit.value,
+        recency_filter=params.recency.value,
+        recency_counts=_to_recency_counts(raw_recency),
+        last_refreshed=last_refreshed,
+        is_stale=bool(refresh_meta.get("is_stale")),
+        stale_threshold_hours=stale_threshold_hours(),
     )
 
 

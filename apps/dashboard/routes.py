@@ -10,11 +10,21 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 
-from apps.dashboard.schemas import FitFeedFilter, JobQueryParams, JobSort, JobsListResponse
+from apps.dashboard.schemas import (
+    FitFeedFilter,
+    JobQueryParams,
+    JobSort,
+    JobsListResponse,
+    RecencyFilter,
+)
 from apps.dashboard.services.jobs_dashboard_service import (
     check_database,
     list_dashboard_jobs,
     to_dashboard_item,
+)
+from packages.core.services.job_refresh_service import (
+    get_refresh_status,
+    start_refresh,
 )
 from apps.cover_letter_generation.services.cover_letter_preflight_service import (
     cover_letter_preflight,
@@ -70,6 +80,7 @@ def _parse_query(
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
     fit: FitFeedFilter | None = Query(default=None),
+    recency: RecencyFilter = Query(default=RecencyFilter.all),
     sort: JobSort = Query(default=JobSort.date_desc),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=100),
@@ -86,10 +97,45 @@ def _parse_query(
         date_from=date_from,
         date_to=date_to,
         fit=fit or default_fit,
+        recency=recency,
         sort=sort,
         page=page,
         page_size=page_size,
     )
+
+
+@router.get("/api/jobs/refresh/status")
+def api_jobs_refresh_status(
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    try:
+        check_database(session)
+        return JSONResponse(get_refresh_status(session))
+    except Exception as exc:
+        if is_database_unavailable(exc):
+            return JSONResponse(
+                {"error": DB_UNAVAILABLE_MESSAGE},
+                status_code=503,
+            )
+        raise
+
+
+@router.post("/api/jobs/refresh")
+def api_jobs_refresh(
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    """Start a background source sync. Does not block the UI."""
+    try:
+        check_database(session)
+    except Exception as exc:
+        if is_database_unavailable(exc):
+            return JSONResponse(
+                {"error": DB_UNAVAILABLE_MESSAGE},
+                status_code=503,
+            )
+        raise
+    state, code = start_refresh()
+    return JSONResponse(state.to_dict(), status_code=code)
 
 
 @router.get("/health")

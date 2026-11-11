@@ -33,12 +33,16 @@ def record_source_sync(
     source_id: str,
     payload: dict[str, Any],
 ) -> None:
+    # Stamp created_at in Python so a skewed DB clock cannot make sync look stale.
+    from datetime import UTC, datetime
+
     session.add(
         AuditEvent(
             entity_type="job_source",
             entity_id=source_id,
             event_type="sync_completed",
             payload=payload,
+            created_at=datetime.now(UTC),
         )
     )
 

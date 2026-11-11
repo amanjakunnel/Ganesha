@@ -327,6 +327,59 @@ select {
   font-size: 0.9rem;
 }
 
+.header-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+
+.refresh-panel {
+  margin: 0 0 1rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.refresh-meta {
+  margin: 0 0 0.35rem;
+  font-size: 0.9rem;
+}
+
+.stale-notice {
+  margin: 0.35rem 0;
+  padding: 0.5rem 0.65rem;
+  background: #fff4df;
+  color: #8a5a00;
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+}
+
+.refresh-progress {
+  margin-top: 0.5rem;
+  font-size: 0.88rem;
+}
+
+.refresh-fail {
+  color: var(--danger);
+}
+
+.new-badge {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.1rem 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 650;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
+.recency-label {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
 .fit-badge {
   display: inline-block;
   padding: 0.15rem 0.45rem;

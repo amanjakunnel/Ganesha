@@ -12,10 +12,19 @@
       <h1>Ganesha Job Dashboard</h1>
       <p class="subtitle">Local jobs with evidence-based fit bands. Generation lives on each job’s detail page.</p>
     </div>
-    <p class="result-count" id="result-count" aria-live="polite">Loading…</p>
+    <div class="header-actions">
+      <p class="result-count" id="result-count" aria-live="polite">Loading…</p>
+      <button type="button" class="btn primary" id="refresh-jobs">Refresh jobs</button>
+    </div>
   </header>
 
   <main>
+    <section class="refresh-panel" id="refresh-panel" aria-live="polite">
+      <p class="refresh-meta muted" id="refresh-meta">Checking last refresh…</p>
+      <p class="stale-notice" id="stale-notice" hidden>Feed looks stale. Refresh to pull new listings.</p>
+      <div class="refresh-progress" id="refresh-progress" hidden></div>
+    </section>
+
     <form id="filters" class="filters" role="search" aria-label="Job filters">
       <div class="filter-field">
         <label for="fit">Fit view</label>
@@ -26,6 +35,16 @@
           <option value="low_fit">Low fit</option>
           <option value="all_eligible">All eligible</option>
           <option value="all">All stored jobs</option>
+        </select>
+      </div>
+      <div class="filter-field">
+        <label for="recency">Recency</label>
+        <select id="recency" name="recency">
+          <option value="all" selected>All</option>
+          <option value="24h">Last 24 hours</option>
+          <option value="3d">Last 3 days</option>
+          <option value="7d">Last 7 days</option>
+          <option value="new_since_refresh">New since last refresh</option>
         </select>
       </div>
       <div class="filter-field">
@@ -73,6 +92,7 @@
     </form>
 
     <p id="fit-counts" class="fit-counts muted" aria-live="polite"></p>
+    <p id="recency-counts" class="fit-counts muted" aria-live="polite"></p>
     <p id="status-message" class="status-message" hidden role="status"></p>
 
     <div class="table-wrap" id="results-wrap">
@@ -84,7 +104,7 @@
             <th scope="col">Fit</th>
             <th scope="col">Location</th>
             <th scope="col">Source</th>
-            <th scope="col">Date found</th>
+            <th scope="col">Recency</th>
             <th scope="col">Details</th>
           </tr>
         </thead>
@@ -106,6 +126,6 @@
       page: "jobs"
     };
   </script>
-  <script src="/static/dashboard.js?v=fit1"></script>
+  <script src="/static/dashboard.js?v=refresh1"></script>
 </body>
 </html>

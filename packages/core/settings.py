@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     fit_stretch_min: int = 50
     # Default dashboard feed: recommended | recommended_stretch | needs_review | low_fit | all_eligible
     fit_default_feed: str = "recommended"
+    # Job feed freshness (dashboard Refresh jobs control)
+    job_feed_stale_hours: int = 24
+    job_refresh_min_interval_seconds: int = 120
+    job_refresh_timeout_seconds: int = 600
     # Live referral contacts Google Sheet (link-view CSV export). Contents stay out of git.
     referral_sheet_id: str = "1GWWHljxgghvhCtQRkIlV-hfC9RoKcgGgj5PDFR6NDVM"
     referral_sheet_gid: str = "0"

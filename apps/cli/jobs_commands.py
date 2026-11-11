@@ -367,6 +367,7 @@ def sync_simplifyjobs_cmd(
             f"fetched={'yes' if result.fetched else 'no'}, "
             f"parsed={result.parsed}, created={result.created}, "
             f"updated={result.updated}, duplicates={result.duplicates}, "
+            f"closed={result.closed}, "
             f"actionable={result.actionable}, needs_review={result.needs_review}, "
             f"excluded={result.excluded}, errors={len(result.errors)}"
         )
