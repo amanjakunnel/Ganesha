@@ -29,6 +29,14 @@ class FitFeedFilter(str, Enum):
     all = "all"
 
 
+class RecencyFilter(str, Enum):
+    hours_24 = "24h"
+    days_3 = "3d"
+    days_7 = "7d"
+    all = "all"
+    new_since_refresh = "new_since_refresh"
+
+
 class JobDashboardItem(BaseModel):
     id: str
     title: str
@@ -47,6 +55,10 @@ class JobDashboardItem(BaseModel):
     fit_reason: str | None = None
     fit_confidence: str | None = None
     eligibility: str | None = None
+    recency_at: datetime | None = None
+    recency_label: str | None = None
+    first_seen_at: datetime | None = None
+    is_new_since_refresh: bool = False
 
 
 class SourceOption(BaseModel):
@@ -64,6 +76,14 @@ class FitBandCounts(BaseModel):
     all_eligible: int = 0
 
 
+class RecencyCounts(BaseModel):
+    hours_24: int = 0
+    days_3: int = 0
+    days_7: int = 0
+    all: int = 0
+    new_since_refresh: int = 0
+
+
 class JobsListResponse(BaseModel):
     items: list[JobDashboardItem]
     page: int
@@ -73,6 +93,11 @@ class JobsListResponse(BaseModel):
     available_sources: list[SourceOption]
     fit_counts: FitBandCounts = Field(default_factory=FitBandCounts)
     fit_filter: str = "recommended"
+    recency_filter: str = "all"
+    recency_counts: RecencyCounts = Field(default_factory=RecencyCounts)
+    last_refreshed: datetime | None = None
+    is_stale: bool = False
+    stale_threshold_hours: int = 24
 
 
 class JobQueryParams(BaseModel):
@@ -82,6 +107,7 @@ class JobQueryParams(BaseModel):
     date_from: date | None = None
     date_to: date | None = None
     fit: FitFeedFilter = FitFeedFilter.recommended
+    recency: RecencyFilter = RecencyFilter.all
     sort: JobSort = JobSort.date_desc
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=50, ge=1, le=100)

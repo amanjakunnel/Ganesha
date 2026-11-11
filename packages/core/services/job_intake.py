@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -103,6 +103,8 @@ def upsert_job_from_import(
         eligibility,
     )
 
+    now = datetime.now(UTC)
+    # Set first-seen in Python so a skewed Postgres clock cannot backdate discovered_at.
     jp = JobPosting(
         source=legacy_source or source_type,
         source_name=source_name,
@@ -117,7 +119,8 @@ def upsert_job_from_import(
         employment_type=data.get("employment_type"),
         description_text=description_text,
         posted_at=_parse_date(data.get("posted_at")),
-        scraped_at=_parse_date(data.get("scraped_at")),
+        scraped_at=_parse_date(data.get("scraped_at")) or now,
+        discovered_at=now,
         status="new",
         normalized_title=title.lower().strip(),
         description_hash=make_description_hash(description_text),

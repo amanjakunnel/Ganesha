@@ -80,20 +80,113 @@ def import_symplicity_cmd(
 
 @jobs_app.command(name="import-referrals")
 def import_referrals_cmd(
+    from_sheet: bool = typer.Option(
+        True, "--from-sheet/--from-xlsx", help="Use live Google Sheet (default)"
+    ),
     path: str = typer.Option(
-        str(DEFAULT_REFERRAL_XLSX), "--path", help="Referral contacts XLSX"
+        str(DEFAULT_REFERRAL_XLSX),
+        "--path",
+        help="Fallback local XLSX only when --from-xlsx is set",
     ),
 ) -> None:
-    """Import referral contact enrichment data (not jobs)."""
+    """Import referral contact enrichment data (not jobs). Live sheet is source of truth."""
+    from pathlib import Path
+
+    from packages.core.services.importers.referral_contacts_sheet import (
+        import_referral_contacts_from_live_sheet,
+    )
     from packages.core.services.importers.referral_contacts_xlsx import (
         import_referral_contacts_xlsx,
     )
 
     session: Session = SessionLocal()
     try:
-        res = import_referral_contacts_xlsx(session, path)
-        session.commit()
-        _print_import_result("Referral contacts import", res)
+        if from_sheet:
+            cache = Path("data/referral_cache/referral_contacts_live.xlsx")
+            res, meta = import_referral_contacts_from_live_sheet(
+                session, cache_path=str(cache)
+            )
+            if not meta.ok:
+                typer.echo(f"Live sheet fetch failed: {meta.error}")
+                typer.echo("Refusing to fall back to a stale local xlsx.")
+                raise typer.Exit(code=1)
+            typer.echo(
+                f"Live sheet ok status={meta.status_code} headers={meta.headers} "
+                f"rows={meta.row_count}"
+            )
+            session.commit()
+            _print_import_result("Referral contacts (live sheet)", res)
+        else:
+            res = import_referral_contacts_xlsx(session, path)
+            session.commit()
+            _print_import_result("Referral contacts import (local xlsx)", res)
+    finally:
+        session.close()
+
+
+@jobs_app.command(name="import-simplify-tracker")
+def import_simplify_tracker_cmd(
+    path: str = typer.Argument(..., help="Path to Simplify Job Tracker export CSV"),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--apply", help="Preview by default; pass --apply to write"
+    ),
+) -> None:
+    """One-way import of a Simplify Job Tracker CSV export (not live sync)."""
+    from packages.core.services.importers.simplify_tracker_csv import (
+        import_simplify_tracker_csv,
+    )
+
+    session: Session = SessionLocal()
+    try:
+        report = import_simplify_tracker_csv(session, path, dry_run=dry_run)
+        if not dry_run:
+            session.commit()
+        data = report.to_dict()
+        typer.echo(
+            "Simplify tracker CSV import: "
+            f"dry_run={data['dry_run']} rows={data['rows_read']} "
+            f"collapsed_dups={data['duplicates_collapsed']} "
+            f"matched_jobs={data['matched_existing_jobs']} "
+            f"new={data['new_records']} already={data['already_imported']} "
+            f"ambiguous={data['ambiguous_count']} "
+            f"applied_like={data['applied_like']} saved_only={data['saved_only']}"
+        )
+        typer.echo(f"Headers: {data['headers']}")
+        typer.echo(f"Status mapping: {data['status_mapping']}")
+        typer.echo(f"Status counts: {data['status_counts']}")
+        if data["archive_path"]:
+            typer.echo(f"Archive copy: {data['archive_path']}")
+        for err in data.get("errors") or []:
+            typer.echo(f"  error: {err}")
+        for amb in (data.get("ambiguous") or [])[:10]:
+            typer.echo(f"  ambiguous: {amb}")
+    finally:
+        session.close()
+
+
+@jobs_app.command(name="referral-careers-pilot")
+def referral_careers_pilot_cmd(
+    limit_companies: int = typer.Option(5, "--limit-companies"),
+    dry_run: bool = typer.Option(True, "--dry-run/--apply"),
+) -> None:
+    """Small pilot: unique referral companies → official careers URLs → ingest jobs."""
+    from packages.core.services.referral_careers_pilot import run_referral_careers_pilot
+
+    session: Session = SessionLocal()
+    try:
+        result = run_referral_careers_pilot(
+            session, limit_companies=limit_companies, dry_run=dry_run
+        )
+        if not dry_run:
+            session.commit()
+        typer.echo(
+            "Referral careers pilot: "
+            f"dry_run={result['dry_run']} companies={result['companies']} "
+            f"fetched={result['fetched']} ingested={result['ingested']} "
+            f"skipped={result['skipped']}"
+        )
+        for note in result.get("notes") or []:
+            typer.echo(f"  {note}")
     finally:
         session.close()
 
@@ -274,6 +367,7 @@ def sync_simplifyjobs_cmd(
             f"fetched={'yes' if result.fetched else 'no'}, "
             f"parsed={result.parsed}, created={result.created}, "
             f"updated={result.updated}, duplicates={result.duplicates}, "
+            f"closed={result.closed}, "
             f"actionable={result.actionable}, needs_review={result.needs_review}, "
             f"excluded={result.excluded}, errors={len(result.errors)}"
         )

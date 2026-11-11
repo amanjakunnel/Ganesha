@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Opt-in scheduled SimplifyJobs sync. Default: not loaded.
+     Edit paths, then: launchctl load ~/Library/LaunchAgents/com.ganesha.job-refresh.plist
+     Does not submit applications or open browsers. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.ganesha.job-refresh</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/amanjakunnel/Tech/Ganesha/.venv/bin/python</string>
+    <string>-m</string>
+    <string>apps.cli.main</string>
+    <string>jobs</string>
+    <string>sync-simplifyjobs</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/amanjakunnel/Tech/Ganesha</string>
+  <key>StartInterval</key>
+  <integer>21600</integer>
+  <key>StandardOutPath</key>
+  <string>/tmp/ganesha-job-refresh.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/ganesha-job-refresh.err.log</string>
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>

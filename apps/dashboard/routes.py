@@ -10,11 +10,21 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 
-from apps.dashboard.schemas import FitFeedFilter, JobQueryParams, JobSort, JobsListResponse
+from apps.dashboard.schemas import (
+    FitFeedFilter,
+    JobQueryParams,
+    JobSort,
+    JobsListResponse,
+    RecencyFilter,
+)
 from apps.dashboard.services.jobs_dashboard_service import (
     check_database,
     list_dashboard_jobs,
     to_dashboard_item,
+)
+from packages.core.services.job_refresh_service import (
+    get_refresh_status,
+    start_refresh,
 )
 from apps.cover_letter_generation.services.cover_letter_preflight_service import (
     cover_letter_preflight,
@@ -70,6 +80,7 @@ def _parse_query(
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
     fit: FitFeedFilter | None = Query(default=None),
+    recency: RecencyFilter = Query(default=RecencyFilter.all),
     sort: JobSort = Query(default=JobSort.date_desc),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=100),
@@ -86,10 +97,45 @@ def _parse_query(
         date_from=date_from,
         date_to=date_to,
         fit=fit or default_fit,
+        recency=recency,
         sort=sort,
         page=page,
         page_size=page_size,
     )
+
+
+@router.get("/api/jobs/refresh/status")
+def api_jobs_refresh_status(
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    try:
+        check_database(session)
+        return JSONResponse(get_refresh_status(session))
+    except Exception as exc:
+        if is_database_unavailable(exc):
+            return JSONResponse(
+                {"error": DB_UNAVAILABLE_MESSAGE},
+                status_code=503,
+            )
+        raise
+
+
+@router.post("/api/jobs/refresh")
+def api_jobs_refresh(
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    """Start a background source sync. Does not block the UI."""
+    try:
+        check_database(session)
+    except Exception as exc:
+        if is_database_unavailable(exc):
+            return JSONResponse(
+                {"error": DB_UNAVAILABLE_MESSAGE},
+                status_code=503,
+            )
+        raise
+    state, code = start_refresh()
+    return JSONResponse(state.to_dict(), status_code=code)
 
 
 @router.get("/health")
@@ -344,6 +390,7 @@ class PrepareApplicationBody(BaseModel):
     include_cover_letter: bool = False
     force_new: bool = False
     acknowledge_fit_warning: bool = False
+    acknowledge_previous_application: bool = False
     confirm: bool = False
 
 
@@ -397,6 +444,7 @@ def api_application_prepare(
             include_cover_letter=body.include_cover_letter,
             force_new=body.force_new,
             acknowledge_fit_warning=body.acknowledge_fit_warning,
+            acknowledge_previous_application=body.acknowledge_previous_application,
         )
         session.commit()
         return JSONResponse(
@@ -485,6 +533,42 @@ def api_application_attempt_open(
         return JSONResponse({"error": "Confirmation required"}, status_code=400)
     try:
         payload = open_attempt_in_chrome(session, attempt_id)
+        session.commit()
+        return JSONResponse(payload)
+    except AttemptNotFoundError:
+        session.rollback()
+        return JSONResponse({"error": "Attempt not found"}, status_code=404)
+    except AttemptError as exc:
+        session.rollback()
+        return JSONResponse({"error": str(exc), "status": "error"}, status_code=400)
+    except Exception as exc:
+        session.rollback()
+        if is_database_unavailable(exc):
+            return JSONResponse({"error": DB_UNAVAILABLE_MESSAGE}, status_code=503)
+        raise
+
+
+@router.post("/api/application-attempts/{attempt_id}/fill-supported")
+def api_application_attempt_fill_supported(
+    attempt_id: str,
+    body: AttemptActionBody,
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    from apps.application_execution.services.attempt_service import (
+        AttemptError,
+        AttemptNotFoundError,
+        fill_attempt_controlled_browser,
+    )
+
+    if not body.confirm:
+        return JSONResponse({"error": "Confirmation required"}, status_code=400)
+    try:
+        payload = fill_attempt_controlled_browser(
+            session,
+            attempt_id,
+            headless=False,
+            keep_open=True,
+        )
         session.commit()
         return JSONResponse(payload)
     except AttemptNotFoundError:

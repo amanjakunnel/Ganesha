@@ -39,15 +39,31 @@
     const resultCount = document.getElementById("result-count");
     const statusMessage = document.getElementById("status-message");
     const fitCounts = document.getElementById("fit-counts");
+    const recencyCounts = document.getElementById("recency-counts");
     const pagination = document.getElementById("pagination");
     const pageMeta = document.getElementById("page-meta");
     const prevBtn = document.getElementById("prev-page");
     const nextBtn = document.getElementById("next-page");
     const clearBtn = document.getElementById("clear-filters");
     const sourceSelect = document.getElementById("source");
+    const refreshBtn = document.getElementById("refresh-jobs");
+    const refreshMeta = document.getElementById("refresh-meta");
+    const staleNotice = document.getElementById("stale-notice");
+    const refreshProgress = document.getElementById("refresh-progress");
+    const PREF_KEY = "ganesha.dashboard.filters";
 
-    const fields = ["fit", "q", "source", "location", "date_from", "date_to", "sort"];
+    const fields = [
+      "fit",
+      "recency",
+      "q",
+      "source",
+      "location",
+      "date_from",
+      "date_to",
+      "sort",
+    ];
     let debounceTimer = null;
+    let refreshPollTimer = null;
     let currentPage = 1;
     const pageSize = 50;
 
@@ -64,9 +80,33 @@
       return params;
     }
 
+    function persistPrefs(params) {
+      try {
+        const payload = {};
+        for (const name of fields) {
+          const value = params.get(name);
+          if (value) payload[name] = value;
+        }
+        localStorage.setItem(PREF_KEY, JSON.stringify(payload));
+      } catch (_err) {
+        /* ignore quota / private mode */
+      }
+    }
+
+    function loadPrefs() {
+      try {
+        const raw = localStorage.getItem(PREF_KEY);
+        if (!raw) return null;
+        return JSON.parse(raw);
+      } catch (_err) {
+        return null;
+      }
+    }
+
     function syncUrl(params) {
       const next = `${window.location.pathname}?${params.toString()}`;
       window.history.replaceState({}, "", next);
+      persistPrefs(params);
     }
 
     function applyParamsToForm(params) {
@@ -77,6 +117,10 @@
           el.value = params.get("fit") || "recommended";
           continue;
         }
+        if (name === "recency") {
+          el.value = params.get("recency") || "all";
+          continue;
+        }
         if (name === "sort") {
           el.value = params.get("sort") || "date_desc";
           continue;
@@ -84,6 +128,19 @@
         el.value = params.get(name) || "";
       }
       currentPage = Math.max(1, parseInt(params.get("page") || "1", 10) || 1);
+    }
+
+    function formatDateTime(iso) {
+      if (!iso) return "never";
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return "never";
+      return d.toLocaleString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      });
     }
 
     function setStatus(kind, html) {
@@ -118,6 +175,14 @@
         `Eligible ${counts.all_eligible || 0}`;
     }
 
+    function renderRecencyCounts(counts) {
+      if (!recencyCounts || !counts) return;
+      recencyCounts.textContent =
+        `Recency · 24h ${counts.hours_24 || 0} · 3d ${counts.days_3 || 0} · ` +
+        `7d ${counts.days_7 || 0} · All ${counts.all || 0} · ` +
+        `New since refresh ${counts.new_since_refresh || 0}`;
+    }
+
     function renderRows(items) {
       jobsBody.innerHTML = "";
       for (const job of items) {
@@ -127,16 +192,135 @@
         const reason = job.fit_reason
           ? `<div class="fit-reason muted">${escapeHtml(job.fit_reason)}</div>`
           : "";
+        const newBadge = job.is_new_since_refresh
+          ? `<span class="new-badge">New</span>`
+          : "";
+        const recencyLabel = job.recency_label || "First seen";
+        const recencyDate = formatDate(job.recency_at || job.date_found);
         tr.innerHTML = `
-          <td class="title-cell" data-label="Title">${titleHtml}${reason}</td>
+          <td class="title-cell" data-label="Title">${titleHtml}${newBadge}${reason}</td>
           <td data-label="Company">${escapeHtml(job.company)}</td>
           <td data-label="Fit">${fitBadge(job.fit_band, job.fit_score)}</td>
           <td data-label="Location"><span class="location-label">${escapeHtml(job.location)}</span></td>
           <td data-label="Source"><span class="source-badge">${escapeHtml(job.source_label || job.source)}</span></td>
-          <td data-label="Date found">${escapeHtml(formatDate(job.date_found))}</td>
+          <td data-label="Recency"><span class="recency-label">${escapeHtml(recencyLabel)}</span> ${escapeHtml(recencyDate)}</td>
           <td data-label="Details"><a class="btn" href="${escapeHtml(detailHref)}">Open details</a></td>
         `;
         jobsBody.appendChild(tr);
+      }
+    }
+
+    function renderRefreshPanel(status) {
+      if (!refreshMeta) return;
+      const overall = status.overall_last_refreshed;
+      const sources = status.sources || [];
+      const sourceBits = sources
+        .map((s) => {
+          const when = s.last_sync ? formatDateTime(s.last_sync) : "never";
+          const stale = s.is_stale ? " (stale)" : "";
+          return `${escapeHtml(s.label)}: ${escapeHtml(when)}${stale}`;
+        })
+        .join(" · ");
+      refreshMeta.innerHTML =
+        `Last refreshed: <strong>${escapeHtml(formatDateTime(overall))}</strong>` +
+        (sourceBits ? `<br><span class="muted">${sourceBits}</span>` : "");
+      if (staleNotice) {
+        staleNotice.hidden = !status.is_stale;
+        if (status.is_stale) {
+          const hours = status.stale_threshold_hours || 24;
+          staleNotice.textContent =
+            `Feed is older than ${hours} hours. Click Refresh jobs to sync SimplifyJobs.`;
+        }
+      }
+      const active = status.active;
+      if (refreshProgress) {
+        if (active && active.status === "running") {
+          refreshProgress.hidden = false;
+          refreshProgress.textContent = active.progress || "Refreshing…";
+          if (refreshBtn) refreshBtn.disabled = true;
+        } else if (active && (active.status === "completed" || active.status === "failed")) {
+          refreshProgress.hidden = false;
+          refreshProgress.innerHTML = renderSourceResults(active);
+          if (refreshBtn) refreshBtn.disabled = false;
+        } else if (status.last_completed) {
+          refreshProgress.hidden = false;
+          refreshProgress.innerHTML = renderSourceResults(status.last_completed);
+          if (refreshBtn) refreshBtn.disabled = false;
+        } else {
+          refreshProgress.hidden = true;
+          if (refreshBtn) refreshBtn.disabled = false;
+        }
+      }
+    }
+
+    function renderSourceResults(state) {
+      const lines = (state.sources || []).map((s) => {
+        if (s.status === "skipped") {
+          return `<div><strong>${escapeHtml(s.label)}</strong>: skipped — ${escapeHtml(s.error_summary || "static")}</div>`;
+        }
+        if (s.status === "failed") {
+          return `<div class="refresh-fail"><strong>${escapeHtml(s.label)}</strong>: failed — ${escapeHtml(s.error_summary || "error")}</div>`;
+        }
+        return (
+          `<div><strong>${escapeHtml(s.label)}</strong>: ${escapeHtml(s.status)} · ` +
+          `fetched ${s.fetched || 0}, new ${s.new || 0}, updated ${s.updated || 0}, ` +
+          `closed ${s.closed || 0}</div>`
+        );
+      });
+      const msg = state.message ? `<div class="muted">${escapeHtml(state.message)}</div>` : "";
+      return msg + lines.join("");
+    }
+
+    async function loadRefreshStatus() {
+      try {
+        const response = await fetch("/api/jobs/refresh/status");
+        if (!response.ok) return null;
+        const data = await response.json();
+        renderRefreshPanel(data);
+        return data;
+      } catch (_err) {
+        return null;
+      }
+    }
+
+    async function pollRefreshUntilDone() {
+      clearTimeout(refreshPollTimer);
+      const data = await loadRefreshStatus();
+      if (data && data.active && data.active.status === "running") {
+        refreshPollTimer = setTimeout(pollRefreshUntilDone, 1500);
+        return;
+      }
+      await loadJobs();
+    }
+
+    async function triggerRefresh() {
+      if (refreshBtn) refreshBtn.disabled = true;
+      if (refreshProgress) {
+        refreshProgress.hidden = false;
+        refreshProgress.textContent = "Starting refresh…";
+      }
+      try {
+        const response = await fetch("/api/jobs/refresh", { method: "POST" });
+        const data = await response.json();
+        if (response.status === 409) {
+          setStatus("empty", "A refresh is already running.");
+          pollRefreshUntilDone();
+          return;
+        }
+        if (response.status === 429) {
+          setStatus("error", escapeHtml(data.message || "Refresh rate-limited."));
+          if (refreshBtn) refreshBtn.disabled = false;
+          return;
+        }
+        if (!response.ok && response.status !== 202) {
+          setStatus("error", escapeHtml(data.message || data.error || "Refresh failed."));
+          if (refreshBtn) refreshBtn.disabled = false;
+          return;
+        }
+        pollRefreshUntilDone();
+      } catch (_err) {
+        setStatus("error", "Could not start refresh.");
+        if (refreshBtn) refreshBtn.disabled = false;
       }
     }
 
@@ -173,6 +357,18 @@
         const data = await response.json();
         populateSources(data.available_sources, params.get("source") || "");
         renderFitCounts(data.fit_counts);
+        renderRecencyCounts(data.recency_counts);
+        if (refreshMeta && data.last_refreshed !== undefined) {
+          renderRefreshPanel({
+            overall_last_refreshed: data.last_refreshed,
+            is_stale: data.is_stale,
+            stale_threshold_hours: data.stale_threshold_hours,
+            sources: [],
+            active: null,
+            last_completed: null,
+          });
+          loadRefreshStatus();
+        }
         resultCount.textContent = `${data.total} job${data.total === 1 ? "" : "s"}`;
         renderRows(data.items || []);
         updatePagination(data);
@@ -212,6 +408,7 @@
         const el = form.elements.namedItem(name);
         if (!el) continue;
         if (name === "fit") el.value = "recommended";
+        else if (name === "recency") el.value = "all";
         else if (name === "sort") el.value = "date_desc";
         else el.value = "";
       }
@@ -225,7 +422,8 @@
       loadJobs();
     });
     clearBtn.addEventListener("click", clearFilters);
-    for (const name of ["fit", "source", "sort"]) {
+    if (refreshBtn) refreshBtn.addEventListener("click", triggerRefresh);
+    for (const name of ["fit", "recency", "source", "sort"]) {
       const el = form.elements.namedItem(name);
       if (el) {
         el.addEventListener("change", () => {
@@ -256,7 +454,16 @@
       loadJobs();
     });
 
-    applyParamsToForm(new URLSearchParams(window.location.search));
+    const urlParams = new URLSearchParams(window.location.search);
+    if (![...urlParams.keys()].length) {
+      const prefs = loadPrefs();
+      if (prefs) {
+        for (const [k, v] of Object.entries(prefs)) {
+          if (v != null) urlParams.set(k, String(v));
+        }
+      }
+    }
+    applyParamsToForm(urlParams);
     loadJobs();
   }
 
@@ -286,6 +493,7 @@
     const applicationBody = document.getElementById("application-body");
     const applicationActions = document.getElementById("application-actions");
     const btnAppOpen = document.getElementById("btn-app-open");
+    const btnAppFill = document.getElementById("btn-app-fill");
     const btnAppReveal = document.getElementById("btn-app-reveal");
     const btnAppSubmitted = document.getElementById("btn-app-submitted");
     const btnAppNeeds = document.getElementById("btn-app-needs");
@@ -341,17 +549,28 @@
         attempt.status
       );
       if (applicationActions) applicationActions.hidden = terminal;
+      if (btnAppFill) {
+        btnAppFill.hidden = terminal || !attempt.controlled_autofill_supported;
+      }
       const resume = (attempt.package && attempt.package.resume) || {};
       const cover = (attempt.package && attempt.package.cover_letter) || null;
+      const autofill = (attempt.package && attempt.package.controlled_autofill) || null;
       const unresolved = (attempt.unresolved || [])
         .slice(0, 8)
         .map((item) => `<li>${escapeHtml(formatUnresolved(item))}</li>`)
         .join("");
+      const filledSummary = autofill && autofill.filled
+        ? autofill.filled
+            .filter((f) => f.status === "filled")
+            .slice(0, 8)
+            .map((f) => `<li>Filled: ${escapeHtml(f.label || f.field_key)}</li>`)
+            .join("")
+        : "";
       applicationBody.innerHTML = `
         <ul class="result-list">
           <li><strong>${escapeHtml(attempt.company || "")}</strong> — ${escapeHtml(attempt.role || "")}</li>
           <li>Status: <strong>${escapeHtml(attempt.status || "")}</strong></li>
-          <li>Mode: Chrome + Simplify assisted handoff (not automatic Ganesha autofill)</li>
+          <li>Mode: Chrome + Simplify handoff available; controlled Greenhouse fill when supported</li>
           <li>Application URL: <code>${escapeHtml(attempt.application_url || "")}</code></li>
           <li>Resume: <code>${escapeHtml(resume.pdf_path || resume.docx_path || "missing")}</code>
             ${resume.validation_ok ? "(validated)" : ""}</li>
@@ -361,8 +580,14 @@
               : "optional — not included"
           }</li>
           <li>Simplify: user-invoked in your Chrome profile; Ganesha cannot observe completion.</li>
+          ${
+            attempt.controlled_autofill_supported
+              ? "<li>Controlled fill: Greenhouse adapter can fill supported fields only; never submits.</li>"
+              : ""
+          }
         </ul>
         <p class="muted">Sensitive employer questions require your explicit answers on the form.</p>
+        ${filledSummary ? `<ul class="result-list">${filledSummary}</ul>` : ""}
         ${unresolved ? `<ul class="result-list">${unresolved}</ul>` : ""}
       `;
     }
@@ -571,6 +796,13 @@
             )}). Confirming will force a new attempt.</span>`
           );
         }
+        if (data.previously_applied) {
+          items.push(
+            `<span class="warn-text">${escapeHtml(
+              data.previously_applied.message || "Previously applied"
+            )}</span>`
+          );
+        }
         (data.simplify_limits || []).slice(0, 3).forEach((line) => {
           items.push(escapeHtml(line));
         });
@@ -580,6 +812,9 @@
           <li><label><input type="checkbox" id="prep-ack-fit" ${
             data.fit_warning ? "" : "checked"
           }> Acknowledge fit warning / proceed</label></li>
+          <li><label><input type="checkbox" id="prep-ack-previous" ${
+            data.previously_applied ? "" : "checked"
+          }> Acknowledge previously-applied warning / proceed</label></li>
         `;
         confirmGenerate.disabled = !data.can_prepare;
         confirmGenerate.textContent = "Prepare";
@@ -614,6 +849,7 @@
         if (pendingAction === "prepare") {
           const includeCover = !!(document.getElementById("prep-include-cover") || {}).checked;
           const ackFit = !!(document.getElementById("prep-ack-fit") || {}).checked;
+          const ackPrev = !!(document.getElementById("prep-ack-previous") || {}).checked;
           const forceNew = !!(preparePreviewData && (preparePreviewData.active_attempts || []).length);
           response = await fetch(
             `/api/jobs/${encodeURIComponent(jobId)}/application/prepare`,
@@ -624,6 +860,8 @@
                 confirm: true,
                 include_cover_letter: includeCover,
                 acknowledge_fit_warning: ackFit || !(preparePreviewData && preparePreviewData.fit_warning),
+                acknowledge_previous_application:
+                  ackPrev || !(preparePreviewData && preparePreviewData.previously_applied),
                 force_new: forceNew,
               }),
             }
@@ -759,6 +997,21 @@
       btnAppOpen.addEventListener("click", () =>
         attemptAction("/open", "Chrome handoff requested.")
       );
+    }
+    if (btnAppFill) {
+      btnAppFill.addEventListener("click", () => {
+        if (
+          !window.confirm(
+            "Fill supported Greenhouse fields in a dedicated Ganesha browser? Ganesha will not click Submit."
+          )
+        ) {
+          return;
+        }
+        attemptAction(
+          "/fill-supported",
+          "Controlled fill finished (or paused). Review in the browser; Ganesha did not submit."
+        );
+      });
     }
     if (btnAppReveal) {
       btnAppReveal.addEventListener("click", () =>
