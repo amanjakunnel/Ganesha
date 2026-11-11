@@ -836,6 +836,130 @@ def likely_applied_page(request: Request) -> HTMLResponse:
     )
 
 
+class AnswerBankBody(BaseModel):
+    question_pattern: str
+    answer: str
+    scope: str = "global"
+    company: str | None = None
+    category: str | None = None
+
+
+@router.get("/api/answer-bank")
+def api_answer_bank_list() -> JSONResponse:
+    from packages.core.services.answer_bank import list_entries
+
+    items = [e.to_public_dict() for e in list_entries()]
+    return JSONResponse({"items": items, "count": len(items)})
+
+
+@router.post("/api/answer-bank")
+def api_answer_bank_add(body: AnswerBankBody) -> JSONResponse:
+    from packages.core.services.answer_bank import add_entry
+
+    try:
+        entry = add_entry(
+            question_pattern=body.question_pattern,
+            answer=body.answer,
+            scope=body.scope if body.scope in {"global", "company"} else "global",  # type: ignore[arg-type]
+            company=body.company,
+            category=body.category,
+        )
+        return JSONResponse({"entry": entry.to_public_dict()}, status_code=201)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@router.delete("/api/answer-bank/{entry_id}")
+def api_answer_bank_delete(entry_id: str) -> JSONResponse:
+    from packages.core.services.answer_bank import delete_entry
+
+    ok = delete_entry(entry_id)
+    if not ok:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return JSONResponse({"deleted": True})
+
+
+@router.get("/answer-bank", response_class=HTMLResponse)
+def answer_bank_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "answer_bank.html",
+        {"db_unavailable_message": DB_UNAVAILABLE_MESSAGE},
+    )
+
+
+@router.get("/api/review-queue")
+def api_review_queue(session: Session = Depends(get_session)) -> JSONResponse:
+    from packages.core.domain.models import ApplicationAttempt
+
+    try:
+        check_database(session)
+        rows = (
+            session.query(ApplicationAttempt)
+            .filter(ApplicationAttempt.status.in_(["ready_for_review", "needs_input"]))
+            .order_by(ApplicationAttempt.updated_at.desc())
+            .limit(100)
+            .all()
+        )
+        items = []
+        for row in rows:
+            unresolved = []
+            payload = row.package_json or {}
+            if isinstance(payload, dict):
+                unresolved = (
+                    (payload.get("controlled_autofill") or {}).get("unresolved")
+                    or payload.get("unresolved")
+                    or []
+                )
+            items.append(
+                {
+                    "attempt_id": row.id,
+                    "job_id": row.job_posting_id,
+                    "company": row.company_name,
+                    "role": row.role_title,
+                    "status": row.status,
+                    "fields_left": unresolved,
+                    "application_url": row.application_url,
+                }
+            )
+        return JSONResponse({"items": items, "count": len(items)})
+    except Exception as exc:
+        if is_database_unavailable(exc):
+            return JSONResponse({"error": DB_UNAVAILABLE_MESSAGE}, status_code=503)
+        raise
+
+
+@router.get("/review-queue", response_class=HTMLResponse)
+def review_queue_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "review_queue.html",
+        {"db_unavailable_message": DB_UNAVAILABLE_MESSAGE},
+    )
+
+
+@router.post("/api/jobs/{job_id}/liveness")
+def api_job_liveness(
+    job_id: str,
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    from packages.core.domain.models import JobPosting
+    from packages.core.services.job_liveness import check_job_liveness
+
+    try:
+        job = session.query(JobPosting).filter(JobPosting.id == job_id).one_or_none()
+        if job is None:
+            return JSONResponse({"error": "Job not found"}, status_code=404)
+        result = check_job_liveness(session, job, mark_closed=True)
+        session.commit()
+        return JSONResponse(result.to_dict())
+    except Exception as exc:
+        session.rollback()
+        if is_database_unavailable(exc):
+            return JSONResponse({"error": DB_UNAVAILABLE_MESSAGE}, status_code=503)
+        raise
+
+
 @router.get("/jobs/{job_id}", response_class=HTMLResponse)
 def job_detail_page(request: Request, job_id: str) -> HTMLResponse:
     return templates.TemplateResponse(

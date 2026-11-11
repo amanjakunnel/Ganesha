@@ -104,6 +104,59 @@ FIELD_MAPPINGS: tuple[FieldMapping, ...] = (
         "",
         "file_cover",
     ),
+    FieldMapping(
+        "school",
+        ("school", "university", "college", "education institution"),
+        (
+            "job_application[educations][][school_name]",
+            "education_school_name",
+            "school_name",
+            "school",
+        ),
+        "school",
+    ),
+    FieldMapping(
+        "degree",
+        ("degree", "degree type", "qualification"),
+        (
+            "job_application[educations][][degree]",
+            "education_degree",
+            "degree",
+        ),
+        "degree",
+    ),
+    FieldMapping(
+        "discipline",
+        ("discipline", "field of study", "major", "area of study"),
+        (
+            "job_application[educations][][discipline]",
+            "education_discipline",
+            "discipline",
+            "major",
+        ),
+        "discipline",
+    ),
+    FieldMapping(
+        "education_start",
+        ("start year", "education start", "from year"),
+        (
+            "job_application[educations][][start_date]",
+            "education_start_date",
+            "start_year",
+        ),
+        "education_start",
+    ),
+    FieldMapping(
+        "education_end",
+        ("end year", "graduation year", "education end", "to year"),
+        (
+            "job_application[educations][][end_date]",
+            "education_end_date",
+            "end_year",
+            "graduation_year",
+        ),
+        "education_end",
+    ),
 )
 
 
@@ -135,20 +188,28 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().lower())
 
 
+def _css_id_safe(name: str) -> bool:
+    """CSS #id selectors cannot include [] or spaces."""
+    return bool(name) and all(ch not in name for ch in "[]# .>")
+
+
 def _locator_for_mapping(page: Any, mapping: FieldMapping) -> Any | None:
     # Modern Greenhouse job-boards use stable element ids with empty name attrs.
     for name in mapping.name_attrs:
-        by_id = page.locator(f"#{name}")
-        if by_id.count() > 0:
-            if mapping.kind.startswith("file"):
-                file_input = page.locator(f"#{name}").locator(
-                    "xpath=self::input[@type='file'] | descendant::input[@type='file']"
-                )
-                if file_input.count() == 0 and name == "resume":
-                    file_input = page.locator("input#resume[type='file'], input[type='file']")
-                if file_input.count() > 0:
-                    return file_input.first
-            return by_id.first
+        if _css_id_safe(name):
+            by_id = page.locator(f"#{name}")
+            if by_id.count() > 0:
+                if mapping.kind.startswith("file"):
+                    file_input = page.locator(f"#{name}").locator(
+                        "xpath=self::input[@type='file'] | descendant::input[@type='file']"
+                    )
+                    if file_input.count() == 0 and name == "resume":
+                        file_input = page.locator(
+                            "input#resume[type='file'], input[type='file']"
+                        )
+                    if file_input.count() > 0:
+                        return file_input.first
+                return by_id.first
         loc = page.locator(
             f'input[name="{name}"], textarea[name="{name}"], select[name="{name}"]'
         )
@@ -215,25 +276,66 @@ def fill_greenhouse_form(
     resume_path: Path,
     cover_letter_path: Path | None,
     include_cover_letter: bool,
+    company: str | None = None,
 ) -> tuple[list[FillFieldResult], list[dict[str, str]], bool, bool]:
     """Fill supported Greenhouse fields. Never clicks Submit."""
+    from packages.core.services.answer_bank import resolve_for_autofill
+
     results: list[FillFieldResult] = []
     unresolved: list[dict[str, str]] = []
     resume_uploaded = False
     cover_uploaded = False
 
-    # Scan unlabeled/sensitive-looking questions for reporting.
+    # Scan unlabeled/sensitive-looking questions; fill only from approved bank.
     labels = page.locator("label")
     for i in range(min(labels.count(), 80)):
         text = (labels.nth(i).inner_text() or "").strip()
         if not text:
             continue
-        if label_is_sensitive(text):
+        if not label_is_sensitive(text):
+            continue
+        resolution = resolve_for_autofill(text, company=company)
+        if resolution["status"] == "filled_from_bank" and resolution.get("answer"):
+            # Try to fill the associated control when a confident locator exists.
+            label_el = labels.nth(i)
+            for_attr = label_el.get_attribute("for")
+            locator = None
+            if for_attr:
+                named = page.locator(f"#{for_attr}")
+                if named.count() > 0:
+                    locator = named.first
+            if locator is None:
+                nested = label_el.locator("input, textarea, select")
+                if nested.count() > 0:
+                    locator = nested.first
+            if locator is not None and not (_current_value(locator) or "").strip():
+                try:
+                    locator.fill(str(resolution["answer"]))
+                    results.append(
+                        FillFieldResult(
+                            "answer_bank",
+                            text[:80],
+                            "filled",
+                            "from_approved_answer_bank",
+                        )
+                    )
+                    continue
+                except Exception:
+                    pass
             unresolved.append(
                 {
                     "kind": "sensitive_question",
                     "label": text[:120],
-                    "action": "answer_manually_on_employer_form",
+                    "action": "bank_answer_available_but_needs_manual_apply",
+                }
+            )
+        else:
+            unresolved.append(
+                {
+                    "kind": "sensitive_question",
+                    "label": text[:120],
+                    "action": "needs_input",
+                    "offer_add_to_bank": "true",
                 }
             )
 

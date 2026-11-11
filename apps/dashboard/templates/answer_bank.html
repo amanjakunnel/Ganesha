@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Answer bank — Ganesha</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-text">
+      <h1>Approved answer bank</h1>
+      <p class="subtitle">Explicitly approved answers only. Stored under ~/.ganesha/ (not in git). Sensitive fields never inferred.</p>
+    </div>
+    <p><a class="btn" href="/">← Jobs</a></p>
+  </header>
+  <main>
+    <form id="add-form" class="filters" style="flex-wrap:wrap">
+      <div class="filter-field"><label>Question pattern (regex or text)</label><input name="question_pattern" required></div>
+      <div class="filter-field"><label>Answer</label><input name="answer" required></div>
+      <div class="filter-field"><label>Scope</label>
+        <select name="scope"><option value="global">global</option><option value="company">company</option></select>
+      </div>
+      <div class="filter-field"><label>Company (if company scope)</label><input name="company"></div>
+      <button type="submit" class="btn primary">Add approved answer</button>
+    </form>
+    <p id="status" class="muted"></p>
+    <div class="table-wrap">
+      <table class="jobs-table">
+        <thead><tr><th>Pattern</th><th>Scope</th><th>Category</th><th>Approved</th><th></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </main>
+  <script>
+    function esc(v){return String(v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+    async function load(){
+      const data = await (await fetch("/api/answer-bank")).json();
+      const tbody = document.getElementById("rows");
+      tbody.innerHTML = "";
+      for (const e of data.items||[]) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${esc(e.question_pattern)}<div class="muted">${esc(e.answer)}</div></td>
+          <td>${esc(e.scope)}${e.company?(" · "+esc(e.company)):""}</td>
+          <td>${esc(e.category||"—")}${e.sensitive?" (sensitive)":""}</td>
+          <td>${esc(e.approved_at||"")}</td>
+          <td><button type="button" class="btn del" data-id="${esc(e.id)}">Delete</button></td>`;
+        tbody.appendChild(tr);
+      }
+      tbody.querySelectorAll(".del").forEach(btn => btn.addEventListener("click", async () => {
+        await fetch("/api/answer-bank/"+encodeURIComponent(btn.dataset.id), {method:"DELETE"});
+        load();
+      }));
+    }
+    document.getElementById("add-form").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const fd = new FormData(ev.target);
+      const body = Object.fromEntries(fd.entries());
+      const res = await fetch("/api/answer-bank", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+      const data = await res.json();
+      document.getElementById("status").textContent = res.ok ? "Saved." : (data.error||"Failed");
+      if (res.ok) { ev.target.reset(); load(); }
+    });
+    load();
+  </script>
+</body>
+</html>

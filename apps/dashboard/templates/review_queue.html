@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Review queue — Ganesha</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-text">
+      <h1>Application review queue</h1>
+      <p class="subtitle">Filled attempts awaiting your review. Opening/filling is never “submitted” — only your confirmation is.</p>
+    </div>
+    <p><a class="btn" href="/">← Jobs</a></p>
+  </header>
+  <main>
+    <p id="summary" class="muted">Loading…</p>
+    <div class="table-wrap">
+      <table class="jobs-table">
+        <thead>
+          <tr>
+            <th>Company / Role</th>
+            <th>Status</th>
+            <th>Left for you</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </main>
+  <script>
+    function esc(v){return String(v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+    async function act(id, action){
+      const path = action === "submitted"
+        ? `/api/application-attempts/${encodeURIComponent(id)}/mark-submitted`
+        : action === "needs_action"
+        ? `/api/application-attempts/${encodeURIComponent(id)}/mark-needs-action`
+        : `/api/application-attempts/${encodeURIComponent(id)}/cancel`;
+      await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({confirm:true})});
+      load();
+    }
+    async function reopen(id){
+      await fetch(`/api/application-attempts/${encodeURIComponent(id)}/open`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({confirm:true})});
+    }
+    async function load(){
+      const data = await (await fetch("/api/review-queue")).json();
+      document.getElementById("summary").textContent = `${data.count||0} attempts awaiting review`;
+      const tbody = document.getElementById("rows");
+      tbody.innerHTML = "";
+      for (const item of data.items||[]) {
+        const left = Array.isArray(item.fields_left) ? item.fields_left.length : 0;
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td><a href="/jobs/${esc(item.job_id)}">${esc(item.company)} — ${esc(item.role)}</a></td>
+          <td>${esc(item.status)}</td>
+          <td>${left} field(s)</td>
+          <td>
+            <button type="button" class="btn" data-a="reopen" data-id="${esc(item.attempt_id)}">Reopen</button>
+            <button type="button" class="btn primary" data-a="submitted" data-id="${esc(item.attempt_id)}">Mark submitted</button>
+            <button type="button" class="btn" data-a="needs_action" data-id="${esc(item.attempt_id)}">Needs action</button>
+            <button type="button" class="btn" data-a="cancel" data-id="${esc(item.attempt_id)}">Cancel</button>
+          </td>`;
+        tbody.appendChild(tr);
+      }
+      tbody.querySelectorAll("button[data-a]").forEach(btn => btn.addEventListener("click", () => {
+        if (btn.dataset.a === "reopen") reopen(btn.dataset.id); else act(btn.dataset.id, btn.dataset.a);
+      }));
+    }
+    load();
+  </script>
+</body>
+</html>

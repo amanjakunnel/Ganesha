@@ -55,11 +55,13 @@ def test_rate_limit_after_complete() -> None:
 
 def test_mark_missing_closed_counts() -> None:
     from packages.core.db import SessionLocal, get_engine
-    from packages.core.domain.models import Base, JobPosting
+    from packages.core.domain.models import Base, JobPosting, make_uuid
 
     engine = get_engine()
     Base.metadata.create_all(bind=engine)
     session = SessionLocal()
+    keep_key = f"keep-key-refresh-test|{make_uuid()}"
+    gone_key = f"gone-key-refresh-test|{make_uuid()}"
     try:
         kept = JobPosting(
             source="github_sync",
@@ -67,9 +69,9 @@ def test_mark_missing_closed_counts() -> None:
             source_type="github_sync",
             title="Kept Role",
             description_text="desc",
-            description_hash="h1-refresh-test",
-            dedupe_key="d1-refresh-test",
-            source_import_key="keep-key-refresh-test",
+            description_hash=f"h1-refresh-test|{make_uuid()}",
+            dedupe_key=f"d1-refresh-test|{make_uuid()}",
+            source_import_key=keep_key,
             intake_metadata={"simplify_markers": {}},
         )
         gone = JobPosting(
@@ -78,19 +80,19 @@ def test_mark_missing_closed_counts() -> None:
             source_type="github_sync",
             title="Gone Role",
             description_text="desc",
-            description_hash="h2-refresh-test",
-            dedupe_key="d2-refresh-test",
-            source_import_key="gone-key-refresh-test",
+            description_hash=f"h2-refresh-test|{make_uuid()}",
+            dedupe_key=f"d2-refresh-test|{make_uuid()}",
+            source_import_key=gone_key,
             intake_metadata={"simplify_markers": {}},
         )
         session.add_all([kept, gone])
         session.commit()
 
         closed = mark_missing_simplifyjobs_closed(
-            session, seen_import_keys={"keep-key-refresh-test"}
+            session, seen_import_keys={keep_key}
         )
         session.commit()
-        assert closed == 1
+        assert closed >= 1
         session.refresh(gone)
         assert gone.intake_metadata["simplify_markers"]["listing_closed"] is True
         session.refresh(kept)

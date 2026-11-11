@@ -50,6 +50,11 @@ def test_fill_fixture_labels_upload_non_overwrite(tmp_path: Path) -> None:
         email="alex@example.com",
         phone="814-555-0100",
         linkedin_url="https://linkedin.com/in/example",
+        school="Pennsylvania State University",
+        degree="B.S.",
+        discipline="Computer Science",
+        education_start="2021",
+        education_end="2025",
     )
 
     with playwright.sync_playwright() as p:
