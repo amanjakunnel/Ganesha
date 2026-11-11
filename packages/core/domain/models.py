@@ -235,6 +235,36 @@ class JobApplication(Base):
     job: Mapped[JobPosting] = relationship("JobPosting")
 
 
+class SimplifyHistoryRecord(Base):
+    """One-way imported Simplify Job Tracker row (manual CSV export)."""
+
+    __tablename__ = "simplify_history_records"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=make_uuid)
+    batch_id: Mapped[str] = mapped_column(String(36), index=True)
+    row_index: Mapped[int | None] = mapped_column(nullable=True)
+    company_name: Mapped[str] = mapped_column(String(255))
+    role_title: Mapped[str] = mapped_column(String(512))
+    location: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    job_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    job_url_raw: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    applied_date_text: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status_raw: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status_mapped: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    job_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    job_posting_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("job_postings.id"), nullable=True, index=True
+    )
+    source_name: Mapped[str] = mapped_column(String(64), default="simplify")
+    source_type: Mapped[str] = mapped_column(String(64), default="tracker_csv_export")
+    source_import_key: Mapped[str] = mapped_column(String(128), unique=True)
+    payload_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class ReferralTask(Base):
     """Tracks referral opportunities and 48-hour cutoff."""
 
