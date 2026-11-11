@@ -173,5 +173,7 @@ def test_python_intake_stamps_discovered_at() -> None:
         )
         assert before - timedelta(seconds=2) <= da <= after + timedelta(seconds=2)
         assert job.scraped_at is not None
+        assert (job.intake_metadata or {}).get("first_seen_source") == "python"
+        assert (job.intake_metadata or {}).get("first_seen_approx") is False
     finally:
         session.close()

@@ -218,12 +218,11 @@ def measure_first_seen_skew(jobs: list[JobPosting]) -> dict[str, Any]:
         if job.scraped_at is None or job.discovered_at is None:
             continue
         delta = (_as_utc(job.scraped_at) - _as_utc(job.discovered_at)).total_seconds()
+        # Rows with last_import and a large gap are normal re-scrapes of older jobs;
+        # discovered_at remains historical first-seen and is not counted as skew here.
         if abs(delta) > SKEW_THRESHOLD.total_seconds() and not meta.get("last_import"):
             skewed += 1
             deltas.append(delta)
-        elif abs(delta) > SKEW_THRESHOLD.total_seconds() and meta.get("last_import"):
-            # Re-scraped older rows: discovered_at is historical first-seen, not skew.
-            pass
     return {
         "total_jobs": total,
         "skew_no_last_import_gt_48h": skewed,
