@@ -286,6 +286,7 @@
     const applicationBody = document.getElementById("application-body");
     const applicationActions = document.getElementById("application-actions");
     const btnAppOpen = document.getElementById("btn-app-open");
+    const btnAppFill = document.getElementById("btn-app-fill");
     const btnAppReveal = document.getElementById("btn-app-reveal");
     const btnAppSubmitted = document.getElementById("btn-app-submitted");
     const btnAppNeeds = document.getElementById("btn-app-needs");
@@ -341,17 +342,28 @@
         attempt.status
       );
       if (applicationActions) applicationActions.hidden = terminal;
+      if (btnAppFill) {
+        btnAppFill.hidden = terminal || !attempt.controlled_autofill_supported;
+      }
       const resume = (attempt.package && attempt.package.resume) || {};
       const cover = (attempt.package && attempt.package.cover_letter) || null;
+      const autofill = (attempt.package && attempt.package.controlled_autofill) || null;
       const unresolved = (attempt.unresolved || [])
         .slice(0, 8)
         .map((item) => `<li>${escapeHtml(formatUnresolved(item))}</li>`)
         .join("");
+      const filledSummary = autofill && autofill.filled
+        ? autofill.filled
+            .filter((f) => f.status === "filled")
+            .slice(0, 8)
+            .map((f) => `<li>Filled: ${escapeHtml(f.label || f.field_key)}</li>`)
+            .join("")
+        : "";
       applicationBody.innerHTML = `
         <ul class="result-list">
           <li><strong>${escapeHtml(attempt.company || "")}</strong> — ${escapeHtml(attempt.role || "")}</li>
           <li>Status: <strong>${escapeHtml(attempt.status || "")}</strong></li>
-          <li>Mode: Chrome + Simplify assisted handoff (not automatic Ganesha autofill)</li>
+          <li>Mode: Chrome + Simplify handoff available; controlled Greenhouse fill when supported</li>
           <li>Application URL: <code>${escapeHtml(attempt.application_url || "")}</code></li>
           <li>Resume: <code>${escapeHtml(resume.pdf_path || resume.docx_path || "missing")}</code>
             ${resume.validation_ok ? "(validated)" : ""}</li>
@@ -361,8 +373,14 @@
               : "optional — not included"
           }</li>
           <li>Simplify: user-invoked in your Chrome profile; Ganesha cannot observe completion.</li>
+          ${
+            attempt.controlled_autofill_supported
+              ? "<li>Controlled fill: Greenhouse adapter can fill supported fields only; never submits.</li>"
+              : ""
+          }
         </ul>
         <p class="muted">Sensitive employer questions require your explicit answers on the form.</p>
+        ${filledSummary ? `<ul class="result-list">${filledSummary}</ul>` : ""}
         ${unresolved ? `<ul class="result-list">${unresolved}</ul>` : ""}
       `;
     }
@@ -571,6 +589,13 @@
             )}). Confirming will force a new attempt.</span>`
           );
         }
+        if (data.previously_applied) {
+          items.push(
+            `<span class="warn-text">${escapeHtml(
+              data.previously_applied.message || "Previously applied"
+            )}</span>`
+          );
+        }
         (data.simplify_limits || []).slice(0, 3).forEach((line) => {
           items.push(escapeHtml(line));
         });
@@ -580,6 +605,9 @@
           <li><label><input type="checkbox" id="prep-ack-fit" ${
             data.fit_warning ? "" : "checked"
           }> Acknowledge fit warning / proceed</label></li>
+          <li><label><input type="checkbox" id="prep-ack-previous" ${
+            data.previously_applied ? "" : "checked"
+          }> Acknowledge previously-applied warning / proceed</label></li>
         `;
         confirmGenerate.disabled = !data.can_prepare;
         confirmGenerate.textContent = "Prepare";
@@ -614,6 +642,7 @@
         if (pendingAction === "prepare") {
           const includeCover = !!(document.getElementById("prep-include-cover") || {}).checked;
           const ackFit = !!(document.getElementById("prep-ack-fit") || {}).checked;
+          const ackPrev = !!(document.getElementById("prep-ack-previous") || {}).checked;
           const forceNew = !!(preparePreviewData && (preparePreviewData.active_attempts || []).length);
           response = await fetch(
             `/api/jobs/${encodeURIComponent(jobId)}/application/prepare`,
@@ -624,6 +653,8 @@
                 confirm: true,
                 include_cover_letter: includeCover,
                 acknowledge_fit_warning: ackFit || !(preparePreviewData && preparePreviewData.fit_warning),
+                acknowledge_previous_application:
+                  ackPrev || !(preparePreviewData && preparePreviewData.previously_applied),
                 force_new: forceNew,
               }),
             }
@@ -759,6 +790,21 @@
       btnAppOpen.addEventListener("click", () =>
         attemptAction("/open", "Chrome handoff requested.")
       );
+    }
+    if (btnAppFill) {
+      btnAppFill.addEventListener("click", () => {
+        if (
+          !window.confirm(
+            "Fill supported Greenhouse fields in a dedicated Ganesha browser? Ganesha will not click Submit."
+          )
+        ) {
+          return;
+        }
+        attemptAction(
+          "/fill-supported",
+          "Controlled fill finished (or paused). Review in the browser; Ganesha did not submit."
+        );
+      });
     }
     if (btnAppReveal) {
       btnAppReveal.addEventListener("click", () =>

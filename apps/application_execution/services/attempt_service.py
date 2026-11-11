@@ -216,6 +216,16 @@ def prepare_preview(session: Session, job_id: str) -> PreparePreview:
 
     active = [_attempt_summary(a) for a in active_attempts(session, job_id)]
 
+    previously_applied = None
+    try:
+        from packages.core.services.importers.simplify_tracker_csv import (
+            previously_applied_for_job,
+        )
+
+        previously_applied = previously_applied_for_job(session, job)
+    except Exception:
+        previously_applied = None
+
     return PreparePreview(
         job_id=job_id,
         company=company,
@@ -237,6 +247,7 @@ def prepare_preview(session: Session, job_id: str) -> PreparePreview:
         active_attempts=active,
         simplify_limits=list(SIMPLIFY_HANDOFF_INSTRUCTIONS),
         profile_fields_available=fields,
+        previously_applied=previously_applied,
     )
 
 
@@ -272,6 +283,7 @@ def prepare_attempt(
     include_cover_letter: bool = False,
     force_new: bool = False,
     acknowledge_fit_warning: bool = False,
+    acknowledge_previous_application: bool = False,
 ) -> ApplicationAttempt:
     preview = prepare_preview(session, job_id)
     if not preview.can_prepare:
@@ -280,6 +292,12 @@ def prepare_attempt(
     if preview.fit_warning and not acknowledge_fit_warning:
         raise AttemptBlockedError(
             "This job has a fit warning. Acknowledge the stretch/low-fit warning to continue."
+        )
+
+    if preview.previously_applied and not acknowledge_previous_application:
+        raise AttemptBlockedError(
+            (preview.previously_applied.get("message") if preview.previously_applied else None)
+            or "Previously applied — acknowledge to continue with another attempt."
         )
 
     active = active_attempts(session, job_id)
@@ -472,6 +490,119 @@ def open_attempt_in_chrome(session: Session, attempt_id: str) -> dict[str, Any]:
     }
 
 
+def fill_attempt_controlled_browser(
+    session: Session,
+    attempt_id: str,
+    *,
+    headless: bool = False,
+    keep_open: bool = True,
+) -> dict[str, Any]:
+    """Mode B: fill supported Greenhouse fields, never submit."""
+    from apps.application_execution.adapters.greenhouse import is_greenhouse_url
+    from apps.application_execution.services.approved_profile import (
+        load_approved_profile,
+    )
+    from apps.application_execution.services.browser_executor import AutofillRequest
+    from apps.application_execution.services.playwright_executor import (
+        PlaywrightGreenhouseExecutor,
+    )
+    from apps.application_execution.paths import EXECUTION_MODE_CONTROLLED
+
+    attempt = get_attempt(session, attempt_id)
+    if attempt.status in {"cancelled", "submitted_user_confirmed", "failed"}:
+        raise AttemptError(f"Cannot autofill attempt in status {attempt.status}")
+    if not is_greenhouse_url(attempt.application_url or ""):
+        raise AttemptError(
+            "Controlled autofill currently supports Greenhouse application URLs only."
+        )
+
+    package = attempt.package_json or {}
+    resume = package.get("resume") if isinstance(package.get("resume"), dict) else {}
+    resume_path = Path(str(resume.get("pdf_path") or resume.get("docx_path") or ""))
+    if not resume_path.is_file() or resume_path.parent.name == "Desktop":
+        raise AttemptError(
+            "Job-specific resume artifact is missing or looks like a Desktop generic file."
+        )
+    cover_path = None
+    if attempt.include_cover_letter:
+        cover = (
+            package.get("cover_letter")
+            if isinstance(package.get("cover_letter"), dict)
+            else None
+        )
+        if cover:
+            cover_path = Path(str(cover.get("pdf_path") or cover.get("docx_path") or ""))
+            if not cover_path.is_file():
+                cover_path = None
+
+    profile = load_approved_profile(session)
+    executor = PlaywrightGreenhouseExecutor()
+    result = executor.fill_application(
+        AutofillRequest(
+            application_url=attempt.application_url or "",
+            resume_path=resume_path,
+            cover_letter_path=cover_path,
+            include_cover_letter=bool(attempt.include_cover_letter and cover_path),
+            profile=profile,
+            headless=headless,
+            keep_open=keep_open and not headless,
+        )
+    )
+
+    attempt.execution_mode = EXECUTION_MODE_CONTROLLED
+    package = dict(package)
+    package["controlled_autofill"] = {
+        "platform": result.platform,
+        "ok": result.ok,
+        "filled": [
+            {
+                "field_key": f.field_key,
+                "label": f.label,
+                "status": f.status,
+                "detail": f.detail,
+            }
+            for f in result.filled
+        ],
+        "resume_uploaded": result.resume_uploaded,
+        "cover_uploaded": result.cover_uploaded,
+        "blockers": result.blockers,
+        "submitted": False,
+        "paused_for_review": result.paused_for_review,
+    }
+    package["ganesha_autofill"] = True
+    package["simplify_mode"] = "user_driven_handoff_still_available"
+    attempt.package_json = package
+    if result.unresolved:
+        attempt.unresolved_json = result.unresolved
+    if result.safe_error:
+        attempt.safe_error = result.safe_error
+        transition_attempt(session, attempt_id, "failed", note=result.safe_error)
+    elif any(
+        u.get("kind") == "sensitive_question" or u.get("kind") == "browser_blocker"
+        for u in result.unresolved
+    ):
+        transition_attempt(session, attempt_id, "needs_input")
+    else:
+        transition_attempt(session, attempt_id, "ready_for_review")
+    session.flush()
+    _write_package_sidecar(attempt)
+    return {
+        "ok": result.ok,
+        "attempt": attempt_public_dict(attempt),
+        "filled": package["controlled_autofill"]["filled"],
+        "unresolved": attempt.unresolved_json,
+        "blockers": result.blockers,
+        "resume_uploaded": result.resume_uploaded,
+        "cover_uploaded": result.cover_uploaded,
+        "paused_for_review": result.paused_for_review,
+        "submitted": False,
+        "autofill_by_ganesha": True,
+        "simplify_handoff_still_available": True,
+        "safe_error": result.safe_error,
+        "platform": result.platform,
+    }
+
+
 def reveal_attempt_documents(session: Session, attempt_id: str) -> dict[str, Any]:
     attempt = get_attempt(session, attempt_id)
     package = attempt.package_json or {}
@@ -538,6 +669,12 @@ def attempt_public_dict(attempt: ApplicationAttempt) -> dict[str, Any]:
             else None
         ),
         "simplify_integration": False,
-        "autofill_by_ganesha": False,
+        "autofill_by_ganesha": bool(
+            (attempt.package_json or {}).get("controlled_autofill")
+        ),
+        "controlled_autofill_supported": (
+            "greenhouse.io" in (attempt.application_url or "").lower()
+            or "greenhouse.com" in (attempt.application_url or "").lower()
+        ),
         "api_key_required": False,
     }
