@@ -162,16 +162,28 @@ def mark_missing_board_jobs_closed(
         pass
     closed = 0
     prefix = f"{board.platform}|{board.board_token}|"
+    # Prefix filter + load_only: never pull description_text blobs just to close rows.
+    from sqlalchemy.orm import load_only
+
     jobs = (
         session.query(JobPosting)
-        .filter(JobPosting.source_name == board.platform)
+        .options(
+            load_only(
+                JobPosting.id,
+                JobPosting.source_import_key,
+                JobPosting.intake_metadata,
+                JobPosting.status,
+            )
+        )
+        .filter(
+            JobPosting.source_name == board.platform,
+            JobPosting.source_import_key.like(f"{prefix}%"),
+        )
         .all()
     )
     for job in jobs:
         key = job.source_import_key
-        if not key or not key.startswith(prefix):
-            continue
-        if key in seen_import_keys:
+        if not key or key in seen_import_keys:
             continue
         meta = dict(job.intake_metadata or {})
         markers = dict(meta.get("simplify_markers") or {})
@@ -186,12 +198,10 @@ def mark_missing_board_jobs_closed(
             "platform": board.platform,
             "board_token": board.board_token,
         }
+        # Listing closed is enough for eligibility; avoid re-reading descriptions.
         eligibility = classify_job_eligibility(
-            title=job.title,
-            description=job.description_text or "",
-            company_apply_url=job.company_apply_url,
-            location=job.location,
-            employment_type=job.employment_type,
+            title="",
+            description="",
             source_markers=markers,
         )
         meta = attach_eligibility_to_metadata(meta, eligibility)
@@ -229,6 +239,9 @@ def sync_company_boards(
         return result
 
     etags = dict(prior_etags if prior_etags is not None else _load_prior_etags(session))
+    # End the read transaction before slow HTTP so Postgres is not pinned idle.
+    session.rollback()
+
     own_client = client is None
     if client is None:
         client = BoardHttpClient()
@@ -265,7 +278,7 @@ def sync_company_boards(
 
             result.fetched += len(fetch.jobs)
             seen_keys: set[str] = set()
-            for job in fetch.jobs:
+            for idx, job in enumerate(fetch.jobs, start=1):
                 seen_keys.add(job.source_import_key)
                 # Eligibility only for rows we expect to create; updates skip reclassify.
                 # Pre-check duplicate cheaply via import key for eligibility gating.
@@ -313,7 +326,11 @@ def sync_company_boards(
                             result.actionable += 1
                     else:
                         result.updated += 1
+                    # Commit in batches so a long board cannot pin one giant transaction.
+                    if idx % 50 == 0:
+                        session.commit()
                 except Exception as exc:  # noqa: BLE001
+                    session.rollback()
                     result.errors.append(
                         f"{job.company} / {job.title}: {exc.__class__.__name__}"
                     )
@@ -322,6 +339,7 @@ def sync_company_boards(
                 result.closed += mark_missing_board_jobs_closed(
                     session, board=board, seen_import_keys=seen_keys
                 )
+                session.commit()
     finally:
         if own_client and client is not None:
             client.close()
