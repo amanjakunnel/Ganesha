@@ -262,7 +262,9 @@ def _run_refresh(refresh_id: str) -> None:
         try:
             if time.monotonic() - started > timeout:
                 raise TimeoutError("Refresh exceeded timeout before company board sync")
-            board_result = sync_company_boards(session, dry_run=False)
+            # Bound board sync on Refresh so one click cannot pin Postgres for
+            # every resolved board; CLI remains available for larger runs.
+            board_result = sync_company_boards(session, dry_run=False, limit=25)
             session.commit()
             cb.status = "success"
             cb.companies_checked = board_result.companies_checked
