@@ -733,21 +733,15 @@ class LikelyAppliedActionBody(BaseModel):
 def api_likely_applied(
     session: Session = Depends(get_session),
 ) -> JSONResponse:
-    from packages.core.services.likely_applied_service import list_likely_applied
+    from packages.core.services.likely_applied_service import list_likely_applied_grouped
     from packages.core.services.gmail_application_match import gmail_ready, gmail_paths
 
     try:
         check_database(session)
-        items = [c.to_dict() for c in list_likely_applied(session)]
-        return JSONResponse(
-            {
-                "items": items,
-                "count": len(items),
-                "low_confidence": sum(1 for i in items if i.get("low_confidence")),
-                "gmail_ready": gmail_ready(),
-                "gmail_paths": gmail_paths(),
-            }
-        )
+        payload = list_likely_applied_grouped(session)
+        payload["gmail_ready"] = gmail_ready()
+        payload["gmail_paths"] = gmail_paths()
+        return JSONResponse(payload)
     except Exception as exc:
         if is_database_unavailable(exc):
             return JSONResponse({"error": DB_UNAVAILABLE_MESSAGE}, status_code=503)
