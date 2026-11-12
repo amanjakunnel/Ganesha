@@ -105,6 +105,12 @@ def upsert_job_from_import(
 
     now = datetime.now(UTC)
     # Set first-seen in Python so a skewed Postgres clock cannot backdate discovered_at.
+    intake_meta = {
+        **intake_meta,
+        "first_seen_source": "python",
+        "first_seen_approx": False,
+        "first_seen_unknown": False,
+    }
     jp = JobPosting(
         source=legacy_source or source_type,
         source_name=source_name,
