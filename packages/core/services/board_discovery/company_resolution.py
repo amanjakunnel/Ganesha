@@ -304,16 +304,40 @@ def resolve_company_boards(
                 merged_unresolved.append(u)
         unresolved = merged_unresolved
 
-    # Prefer referral-linked boards over incidental job-derived boards.
+    # Prefer referral-linked boards only (sheet match + careers). Do not pad the
+    # pilot list with unrelated job-derived boards from other employers.
+    referral_keys = {normalize_company_key(c) for c in companies}
     merged: list[BoardRef] = []
     merged_keys: set[str] = set()
-    for ref in [*sheet_boards, *careers_boards, *job_boards]:
+    for ref in [*sheet_boards, *careers_boards]:
         if ref.key in merged_keys:
             continue
         merged_keys.add(ref.key)
         merged.append(ref)
         if len(merged) >= max(0, limit):
             break
+    # If the sheet was empty/unavailable, fall back to job-derived tokens so
+    # operators can still smoke-test board sync.
+    if not companies and not merged:
+        for ref in job_boards:
+            if ref.key in merged_keys:
+                continue
+            merged_keys.add(ref.key)
+            merged.append(ref)
+            if len(merged) >= max(0, limit):
+                break
+    elif companies and len(merged) < max(0, limit):
+        # Only add job-derived boards whose company is on the referral sheet
+        # (covers multi-token employers already partially matched).
+        for ref in job_boards:
+            if normalize_company_key(ref.company) not in referral_keys:
+                continue
+            if ref.key in merged_keys:
+                continue
+            merged_keys.add(ref.key)
+            merged.append(ref)
+            if len(merged) >= max(0, limit):
+                break
 
     result.boards = merged
     result.unresolved = unresolved

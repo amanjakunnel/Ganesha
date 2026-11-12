@@ -252,12 +252,12 @@ def _probe_ats_slugs(
                     board=verified, method="slug_probe", verified=True
                 )
     # Duck-style HTML board page GET for title hint (one slug, three hosts).
-    slug = slugs[0] if slugs else None
-    if slug:
+    if slugs:
+        primary_slug = slugs[0]
         for platform, page_url in (
-            (PLATFORM_GREENHOUSE, f"https://boards.greenhouse.io/{slug}"),
-            (PLATFORM_LEVER, f"https://jobs.lever.co/{slug}"),
-            (PLATFORM_ASHBY, f"https://jobs.ashbyhq.com/{slug}"),
+            (PLATFORM_GREENHOUSE, f"https://boards.greenhouse.io/{primary_slug}"),
+            (PLATFORM_LEVER, f"https://jobs.lever.co/{primary_slug}"),
+            (PLATFORM_ASHBY, f"https://jobs.ashbyhq.com/{primary_slug}"),
         ):
             try:
                 page = client.get(page_url, accept=_HTML_ACCEPT)
@@ -271,7 +271,7 @@ def _probe_ats_slugs(
             verified = verify_board_belongs_to_company(
                 client,
                 platform=platform,
-                token=slug,
+                token=primary_slug,
                 company=company,
                 html_hint=page.text or "",
             )
