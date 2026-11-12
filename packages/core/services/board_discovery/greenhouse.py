@@ -126,11 +126,23 @@ def parse_jobs(
                 canonical_url=absolute,
                 company_apply_url=absolute,
                 requisition_id=req_str or None,
-                posted_at=raw.get("updated_at") or raw.get("first_published"),
+                posted_at=_posted_at_from_raw(raw),
                 raw_payload={"id": job_id, "requisition_id": requisition},
             )
         )
     return out
+
+
+def _posted_at_from_raw(raw: dict[str, Any]) -> str | None:
+    """Prefer first_published (true post date); fall back to updated_at only if missing."""
+    for key in ("first_published", "updated_at"):
+        val = raw.get(key)
+        if val is None:
+            continue
+        text = str(val).strip()
+        if text:
+            return text
+    return None
 
 
 def fetch_board(

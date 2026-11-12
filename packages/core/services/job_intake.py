@@ -29,30 +29,36 @@ class ImportResult:
 
 
 def get_or_create_company(session: Session, name: str) -> Company | None:
-    return _get_or_create_company(session, name)
+    company, _warning = _get_or_create_company(session, name)
+    return company
 
 
-def _get_or_create_company(session: Session, name: str) -> Company | None:
+def _get_or_create_company(
+    session: Session, name: str
+) -> tuple[Company | None, str | None]:
     name_norm = canonical_company_display(name)
     if not name_norm:
-        return None
+        return None, None
     nkey = normalize_company_key(name_norm)
-    existing = (
+    matches = (
         session.query(Company)
         .filter(
             (Company.canonical_name == name_norm) | (Company.normalized_key == nkey)
         )
-        .one_or_none()
+        .order_by(Company.created_at.asc(), Company.id.asc())
+        .all()
     )
-    if existing:
+    warning = f"company_duplicate:{name_norm}" if len(matches) > 1 else None
+    if matches:
+        existing = matches[0]
         if not existing.normalized_key:
             existing.normalized_key = nkey
             session.add(existing)
-        return existing
+        return existing, warning
     c = Company(canonical_name=name_norm, normalized_key=nkey)
     session.add(c)
     session.flush()
-    return c
+    return c, None
 
 
 def upsert_job_from_import(
@@ -63,6 +69,7 @@ def upsert_job_from_import(
     source_type: str,
     legacy_source: str | None = None,
     reclassify_on_update: bool = True,
+    warnings_out: list[str] | None = None,
 ) -> tuple[str, bool]:
     """Insert or update a job from a structured import row.
 
@@ -73,6 +80,10 @@ def upsert_job_from_import(
     discovery so eligibility applies to newly created rows only).
     """
     dup = find_duplicate_job(session, {**data, "source_name": source_name})
+    if warnings_out is not None:
+        for warn in dup.warnings:
+            if warn not in warnings_out:
+                warnings_out.append(warn)
     if dup.is_duplicate and dup.existing_id:
         existing = (
             session.query(JobPosting).filter(JobPosting.id == dup.existing_id).one()
@@ -96,7 +107,9 @@ def upsert_job_from_import(
         session.flush()
         return existing.id, False
 
-    company = _get_or_create_company(session, data["company"])
+    company, company_warning = _get_or_create_company(session, data["company"])
+    if company_warning and warnings_out is not None and company_warning not in warnings_out:
+        warnings_out.append(company_warning)
     title = data["title"]
     description_text = data["description_text"]
     flags = detect_intake_flags(title, description_text)
@@ -206,11 +219,23 @@ def _touch_import(
 
 
 def _parse_date(val: Any) -> datetime | None:
-    if not val:
+    if not val and val != 0:
         return None
     if isinstance(val, datetime):
         return val
+    if isinstance(val, (int, float)):
+        n = float(val)
+        # Milliseconds epoch (Lever createdAt) vs seconds.
+        seconds = n / 1000.0 if n >= 1e11 else n
+        try:
+            return datetime.fromtimestamp(seconds, tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            return None
     s = str(val).strip()
+    if not s:
+        return None
+    if s.isdigit() or (s.startswith("-") and s[1:].isdigit()):
+        return _parse_date(int(s))
     if s.endswith("Z"):
         s = s[:-1] + "+00:00"
     try:
