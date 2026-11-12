@@ -195,10 +195,13 @@
         const newBadge = job.is_new_since_refresh
           ? `<span class="new-badge">New</span>`
           : "";
+        const verifyBadge = job.description_badge
+          ? `<span class="verify-badge">${escapeHtml(job.description_badge)}</span>`
+          : "";
         const recencyLabel = job.recency_label || "First seen";
         const recencyDate = formatDate(job.recency_at || job.date_found);
         tr.innerHTML = `
-          <td class="title-cell" data-label="Title">${titleHtml}${newBadge}${reason}</td>
+          <td class="title-cell" data-label="Title">${titleHtml}${newBadge}${verifyBadge}${reason}</td>
           <td data-label="Company">${escapeHtml(job.company)}</td>
           <td data-label="Fit">${fitBadge(job.fit_band, job.fit_score)}</td>
           <td data-label="Location"><span class="location-label">${escapeHtml(job.location)}</span></td>
@@ -670,10 +673,47 @@
         document.getElementById("job-description").textContent =
           data.description_text || "(No description stored)";
         const warn = document.getElementById("desc-warning");
-        if (data.description_incomplete) {
+        const badge = data.description_badge || (job && job.description_badge);
+        if (badge || data.description_incomplete) {
           warn.hidden = false;
-          warn.textContent =
-            "Job description looks incomplete. Tailoring quality may be limited.";
+          warn.textContent = badge
+            ? `${badge}. Tailoring and eligibility may change once the full posting is fetched.`
+            : "Job description looks incomplete. Tailoring quality may be limited.";
+        } else {
+          warn.hidden = true;
+        }
+        const eligEl = document.getElementById("job-eligibility");
+        if (eligEl) {
+          const reason = data.eligibility_reason
+            ? ` (${String(data.eligibility_reason).split("_").join(" ")})`
+            : "";
+          eligEl.textContent = `${data.eligibility || "—"}${reason}`;
+        }
+        const badgesEl = document.getElementById("job-badges");
+        if (badgesEl) {
+          const chips = [];
+          if (badge) {
+            chips.push(`<span class="verify-badge">${escapeHtml(badge)}</span>`);
+          }
+          for (const flag of data.eligibility_flags || []) {
+            chips.push(
+              `<span class="auth-flag-badge">${escapeHtml(String(flag).split("_").join(" "))}</span>`
+            );
+          }
+          for (const item of data.eligibility_flag_excerpts || []) {
+            if (item && item.excerpt) {
+              chips.push(
+                `<span class="auth-flag-badge" title="${escapeHtml(item.excerpt)}">${escapeHtml(
+                  String(item.flag || "note").split("_").join(" ")
+                )}</span>`
+              );
+            }
+          }
+          badgesEl.innerHTML = chips.join(" ");
+          badgesEl.hidden = chips.length === 0;
+        }
+        if (data.enrichment && data.enrichment.title_updated) {
+          document.getElementById("job-title").textContent = job.title || "Untitled";
         }
         renderFit(data.fit || {});
         applyGenerationAvailability(data);

@@ -55,6 +55,10 @@ class JobDashboardItem(BaseModel):
     fit_reason: str | None = None
     fit_confidence: str | None = None
     eligibility: str | None = None
+    eligibility_reason: str | None = None
+    eligibility_flags: list[str] = Field(default_factory=list)
+    description_verified: bool = True
+    description_badge: str | None = None
     recency_at: datetime | None = None
     recency_label: str | None = None
     first_seen_at: datetime | None = None

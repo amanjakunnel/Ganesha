@@ -176,6 +176,7 @@ def api_jobs(
 def api_job_detail(
     job_id: str,
     session: Session = Depends(get_session),
+    enrich: bool = Query(default=True),
 ) -> JSONResponse:
     try:
         job = (
@@ -186,6 +187,17 @@ def api_job_detail(
         )
         if job is None:
             return JSONResponse({"error": "Job not found"}, status_code=404)
+        enrichment_outcome = None
+        if enrich:
+            from packages.core.services.job_enrichment import (
+                enrich_job,
+                job_needs_enrichment,
+            )
+
+            if job_needs_enrichment(job):
+                enrichment_outcome = enrich_job(session, job, dry_run=False)
+                session.commit()
+                session.refresh(job)
         item = to_dashboard_item(job)
         req = extract_job_requirements(job)
         sem = semantic_status()
@@ -193,11 +205,15 @@ def api_job_detail(
         cover_block = cover_letter_preflight(session, job)
         fit = get_stored_fit(job) or {}
         eligibility = resolve_job_eligibility(job)
+        from packages.core.services.job_eligibility import enrichment_badge
+
         return JSONResponse(
             {
                 "job": item.model_dump(mode="json"),
                 "description_text": job.description_text or "",
                 "description_incomplete": req.insufficient_description,
+                "description_verified": item.description_verified,
+                "description_badge": enrichment_badge(job),
                 "recommended_track": req.role_family,
                 "workplace_type": job.workplace_type,
                 "canonical_url": job.canonical_url,
@@ -206,6 +222,14 @@ def api_job_detail(
                 "semantic_configured": sem["api_key"] == "configured"
                 or sem["provider"] == "none",
                 "eligibility": eligibility.result,
+                "eligibility_reason": eligibility.reason_category,
+                "eligibility_flags": list(eligibility.flags),
+                "eligibility_flag_excerpts": [
+                    {"flag": f, "excerpt": e} for f, e in eligibility.flag_excerpts
+                ],
+                "enrichment": enrichment_outcome.to_dict()
+                if enrichment_outcome is not None
+                else None,
                 "fit": fit,
                 "resume_generation": {
                     "available": resume_block is None,

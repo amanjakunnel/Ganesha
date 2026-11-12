@@ -375,6 +375,31 @@ select {
   vertical-align: middle;
 }
 
+.verify-badge,
+.auth-flag-badge {
+  display: inline-block;
+  margin: 0.15rem 0.35rem 0.15rem 0;
+  padding: 0.15rem 0.45rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
+.verify-badge {
+  background: #fff4df;
+  color: #8a5a00;
+}
+
+.auth-flag-badge {
+  background: #eef2f7;
+  color: #334155;
+}
+
+.job-badges {
+  margin-top: 0.35rem;
+}
+
 .recency-label {
   color: var(--muted);
   font-size: 0.85rem;
