@@ -123,9 +123,12 @@ def get_refresh_status(session: Session | None = None) -> dict[str, Any]:
         age_hours = None
         is_stale = False
         if overall:
-            age_hours = (
-                datetime.now(UTC) - datetime.fromisoformat(overall)
-            ).total_seconds() / 3600.0
+            overall_dt = datetime.fromisoformat(overall)
+            if overall_dt.tzinfo is None:
+                overall_dt = overall_dt.replace(tzinfo=UTC)
+            else:
+                overall_dt = overall_dt.astimezone(UTC)
+            age_hours = (datetime.now(UTC) - overall_dt).total_seconds() / 3600.0
             is_stale = age_hours > stale_threshold_hours()
         payload: dict[str, Any] = {
             "active": active.to_dict() if active else None,
@@ -369,6 +372,11 @@ def _source_status_snapshot(session: Session) -> list[dict[str, Any]]:
         age_hours = None
         is_stale = True
         if effective is not None:
+            # SQLite may return naive datetimes; normalize before age math.
+            if effective.tzinfo is None:
+                effective = effective.replace(tzinfo=UTC)
+            else:
+                effective = effective.astimezone(UTC)
             age_hours = (datetime.now(UTC) - effective).total_seconds() / 3600.0
             is_stale = age_hours > stale_threshold_hours()
         if source_id in ("simplifyjobs", "company_boards"):

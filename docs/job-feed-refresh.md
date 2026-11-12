@@ -21,17 +21,24 @@ LinkedIn / Symplicity imports are static local files and are **not** re-fetched 
 
 Refresh updates SimplifyJobs via the existing `sync_simplifyjobs` service: dedupe, eligibility on new/updated rows, fit assessment **only for newly created jobs**, and `listing_closed` for postings missing from the latest README. Saved jobs, notes, applications, and artifacts are preserved.
 
-## Recency filters
+## Recency presets
 
 “Recent” uses:
 
-1. Source **posted** date when present (SimplifyJobs age → `posted_at`), labeled **Posted** or **Posted (source age)**.
+1. Source **posted** date when present (SimplifyJobs age → `posted_at`), labeled **Posted**.
 2. Otherwise Ganesha **first seen** (`discovered_at`), labeled **First seen**.
 
-Windows: Last 24 hours, Last 3 days, Last 7 days, All, and **New since last refresh**.
+Presets only (no date picker): Last 24 hours, Last 48 hours, Last 7 days, Last 30 days, All.
 Boundary is inclusive (exactly 24h ago still matches Last 24 hours).
+Jobs with approximate/unknown first-seen (and no source `posted_at`) are excluded from time presets; their count is shown beside the preset counts. They remain visible under **All**.
+
+Within the selected fit + recency filters, the feed sorts newest-first by the same recency clock.
 
 Filter choices persist in `localStorage` key `ganesha.dashboard.filters` (same preference mechanism as the URL query string).
+
+### Recommended feed honesty gap
+
+Default **Recommended** already requires `eligibility == actionable` and fit band `recommended`, so excluded eligibility and non-recommended bands cannot top that feed. Remaining gap if JD enrichment is not yet merged: a PhD-only/ineligible role whose *stored* title/description still omit the hard requirement may be scored Recommended until enrichment refreshes the JD text.
 
 ## Optional scheduled refresh (opt-in, default off)
 

@@ -5,7 +5,7 @@ Definition of "recent" for a job:
   2. Otherwise fall back to first_seen_at (= discovered_at).
 
 Approximate / unknown first-seen values are labeled and never counted as "new"
-in recency windows (they must not inflate Last 24 hours).
+in time presets (they must not inflate Last 24 hours / 48 hours / 7 days / 30 days).
 """
 
 from __future__ import annotations
@@ -23,19 +23,29 @@ SKEW_THRESHOLD = timedelta(hours=48)
 
 class RecencyWindow(str, Enum):
     hours_24 = "24h"
-    days_3 = "3d"
+    hours_48 = "48h"
     days_7 = "7d"
+    days_30 = "30d"
     all = "all"
-    new_since_refresh = "new_since_refresh"
 
 
 WINDOW_DELTAS: dict[RecencyWindow, timedelta | None] = {
     RecencyWindow.hours_24: timedelta(hours=24),
-    RecencyWindow.days_3: timedelta(days=3),
+    RecencyWindow.hours_48: timedelta(hours=48),
     RecencyWindow.days_7: timedelta(days=7),
+    RecencyWindow.days_30: timedelta(days=30),
     RecencyWindow.all: None,
-    RecencyWindow.new_since_refresh: None,
 }
+
+# Time presets that must never include approximate/unknown first-seen clocks.
+TIME_PRESETS: frozenset[RecencyWindow] = frozenset(
+    {
+        RecencyWindow.hours_24,
+        RecencyWindow.hours_48,
+        RecencyWindow.days_7,
+        RecencyWindow.days_30,
+    }
+)
 
 
 def first_seen_at(job: JobPosting) -> datetime | None:
@@ -101,22 +111,12 @@ def recency_timestamp(job: JobPosting) -> tuple[datetime | None, str]:
     """Return (timestamp, label) used for recency filtering and display.
 
     Labels:
-      - "Posted" when posted_at is present from a non-age source marker
-      - "Posted (source age)" when SimplifyJobs age_days drove posted_at
-      - "First seen" when falling back to a reliable discovered_at / created_at
-      - "First seen (approx)" / "First seen (unknown)" when metadata says so
+      - "Posted" when a source posted_at is present
+      - "First seen" when falling back to discovered_at / created_at
     """
-    meta = job.intake_metadata or {}
     if job.posted_at is not None:
-        if meta.get("simplify_age_days") is not None:
-            return job.posted_at, "Posted (source age)"
         return job.posted_at, "Posted"
-    seen = first_seen_at(job)
-    if meta.get("first_seen_unknown"):
-        return seen, "First seen (unknown)"
-    if meta.get("first_seen_approx"):
-        return seen, "First seen (approx)"
-    return seen, "First seen"
+    return first_seen_at(job), "First seen"
 
 
 def _uses_unreliable_first_seen(job: JobPosting) -> bool:
@@ -126,6 +126,27 @@ def _uses_unreliable_first_seen(job: JobPosting) -> bool:
     return first_seen_is_approximate(job)
 
 
+def uses_unreliable_first_seen(job: JobPosting) -> bool:
+    """Public alias: approximate/unknown first-seen with no source posted_at."""
+    return _uses_unreliable_first_seen(job)
+
+
+def is_new_since_refresh(
+    job: JobPosting,
+    *,
+    last_refresh_started_at: datetime | None,
+) -> bool:
+    """True when first-seen is at/after the last refresh start (honest clocks only)."""
+    if last_refresh_started_at is None:
+        return False
+    if _uses_unreliable_first_seen(job):
+        return False
+    seen = first_seen_at(job)
+    if seen is None:
+        return False
+    return _as_utc(seen) >= _as_utc(last_refresh_started_at)
+
+
 def is_within_window(
     job: JobPosting,
     window: RecencyWindow,
@@ -133,27 +154,13 @@ def is_within_window(
     now: datetime | None = None,
     last_refresh_started_at: datetime | None = None,
 ) -> bool:
+    del last_refresh_started_at  # retained for call-site compatibility
     if window == RecencyWindow.all:
         return True
 
-    # Approximate/unknown first-seen must not inflate "new" buckets.
-    if _uses_unreliable_first_seen(job):
-        if window in {
-            RecencyWindow.hours_24,
-            RecencyWindow.days_3,
-            RecencyWindow.days_7,
-            RecencyWindow.new_since_refresh,
-        }:
-            return False
-
-    if window == RecencyWindow.new_since_refresh:
-        if last_refresh_started_at is None:
-            return False
-        seen = first_seen_at(job)
-        if seen is None:
-            return False
-        # Inclusive: jobs first seen at/after the refresh start count as new.
-        return _as_utc(seen) >= _as_utc(last_refresh_started_at)
+    # Approximate/unknown first-seen must not inflate time presets.
+    if _uses_unreliable_first_seen(job) and window in TIME_PRESETS:
+        return False
 
     delta = WINDOW_DELTAS.get(window)
     if delta is None:
@@ -162,7 +169,7 @@ def is_within_window(
     if ts is None:
         return False
     cutoff = _as_utc(now or datetime.now(UTC)) - delta
-    # Inclusive boundary: exactly 24h ago still counts as within last 24 hours.
+    # Inclusive boundary: exactly N ago still counts as within the preset.
     return _as_utc(ts) >= cutoff
 
 
@@ -178,17 +185,17 @@ def recency_counts(
     now: datetime | None = None,
     last_refresh_started_at: datetime | None = None,
 ) -> dict[str, int]:
+    del last_refresh_started_at  # retained for call-site compatibility
     now = now or datetime.now(UTC)
     counts = {w.value: 0 for w in RecencyWindow}
+    unknown_or_approx = 0
     for job in jobs:
+        if _uses_unreliable_first_seen(job):
+            unknown_or_approx += 1
         for window in RecencyWindow:
-            if is_within_window(
-                job,
-                window,
-                now=now,
-                last_refresh_started_at=last_refresh_started_at,
-            ):
+            if is_within_window(job, window, now=now):
                 counts[window.value] += 1
+    counts["unknown_or_approx"] = unknown_or_approx
     return counts
 
 

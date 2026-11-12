@@ -31,10 +31,10 @@ class FitFeedFilter(str, Enum):
 
 class RecencyFilter(str, Enum):
     hours_24 = "24h"
-    days_3 = "3d"
+    hours_48 = "48h"
     days_7 = "7d"
+    days_30 = "30d"
     all = "all"
-    new_since_refresh = "new_since_refresh"
 
 
 class JobDashboardItem(BaseModel):
@@ -78,10 +78,11 @@ class FitBandCounts(BaseModel):
 
 class RecencyCounts(BaseModel):
     hours_24: int = 0
-    days_3: int = 0
+    hours_48: int = 0
     days_7: int = 0
+    days_30: int = 0
     all: int = 0
-    new_since_refresh: int = 0
+    unknown_or_approx: int = 0
 
 
 class JobsListResponse(BaseModel):
