@@ -224,19 +224,30 @@ def sync_company_boards(
     csv_text: str | None = None,
     client: BoardHttpClient | None = None,
     prior_etags: dict[str, str] | None = None,
+    boards: list[BoardRef] | None = None,
+    persist_resolutions: bool = False,
 ) -> CompanyBoardSyncResult:
     result = CompanyBoardSyncResult(dry_run=dry_run)
     max_companies = _max_companies(limit)
     synced_at = datetime.now(UTC)
 
-    resolution = resolve_company_boards(
-        session, limit=max_companies, csv_text=csv_text
-    )
-    result.companies_checked = len(resolution.companies)
-    result.unresolved = list(resolution.unresolved)
-    if resolution.sheet_error:
-        result.errors.append(f"referral_sheet: {resolution.sheet_error}")
-        return result
+    if boards is not None:
+        board_list = list(boards)[:max_companies]
+        result.companies_checked = len({b.company for b in board_list})
+        result.unresolved = []
+    else:
+        resolution = resolve_company_boards(
+            session,
+            limit=max_companies,
+            csv_text=csv_text,
+            persist_resolutions=persist_resolutions,
+        )
+        result.companies_checked = len(resolution.companies)
+        result.unresolved = list(resolution.unresolved)
+        if resolution.sheet_error:
+            result.errors.append(f"referral_sheet: {resolution.sheet_error}")
+            return result
+        board_list = list(resolution.boards)
 
     etags = dict(prior_etags if prior_etags is not None else _load_prior_etags(session))
     # End the read transaction before slow HTTP so Postgres is not pinned idle.
@@ -247,7 +258,7 @@ def sync_company_boards(
         client = BoardHttpClient()
 
     try:
-        for board in resolution.boards:
+        for board in board_list:
             result.boards_attempted += 1
             fetcher = _FETCHERS.get(board.platform)
             if fetcher is None:

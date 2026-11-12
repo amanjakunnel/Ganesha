@@ -1,8 +1,9 @@
 """Resolve referral companies to Greenhouse / Lever / Ashby board tokens.
 
-Board tokens are derived from existing JobPosting apply/canonical URLs.
-Unique company names come from the referral contacts sheet adapter.
-Contact PII is never logged or attached to jobs.
+Board tokens come from: (a) existing JobPosting URLs, (b) referral sheet
+company name matches against those tokens, (c) careers-page resolver for
+still-unresolved referral companies. Contact PII is never logged or attached
+to jobs.
 """
 
 from __future__ import annotations
@@ -45,6 +46,10 @@ class ResolutionResult:
     boards: list[BoardRef] = field(default_factory=list)
     unresolved: list[UnresolvedCompany] = field(default_factory=list)
     sheet_error: str | None = None
+    careers_resolved: int = 0
+    vendor_counts: dict[str, int] = field(default_factory=dict)
+    unresolved_reason_counts: dict[str, int] = field(default_factory=dict)
+    newly_resolved_boards: list[BoardRef] = field(default_factory=list)
 
 
 def parse_board_from_url(url: str | None) -> tuple[str, str, str | None] | None:
@@ -179,25 +184,51 @@ def load_pilot_companies(
     return companies, None
 
 
+def _vendor_counts(boards: Iterable[BoardRef]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for ref in boards:
+        counts[ref.platform] = counts.get(ref.platform, 0) + 1
+    return counts
+
+
+def _unresolved_reason_counts(
+    unresolved: Iterable[UnresolvedCompany],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in unresolved:
+        counts[item.reason] = counts.get(item.reason, 0) + 1
+    return counts
+
+
 def resolve_company_boards(
     session: Session,
     *,
     limit: int,
     csv_text: str | None = None,
+    use_careers_resolver: bool = True,
+    persist_resolutions: bool = False,
+    careers_client: object | None = None,
 ) -> ResolutionResult:
-    """Build a pilot board list from (a) job-URL tokens and (b) referral companies.
+    """Build a pilot board list preferring referral-sheet companies.
 
-    Caps total boards at ``limit`` (default 25). Job-derived boards are preferred
-    because their tokens are already proven live apply URLs. Referral companies
-    without a matching board stay in ``unresolved`` and are skipped.
+    Order of preference within ``limit``:
+      (b) referral companies matched via job-URL tokens
+      (c) referral companies resolved via careers/ATS probes
+      (a) other job-derived boards (fill remaining slots only)
+
+    Caps total boards at ``limit``. Referral companies without a board stay in
+    ``unresolved``.
     """
     companies, sheet_error = load_pilot_companies(limit=limit, csv_text=csv_text)
     result = ResolutionResult(companies=companies, sheet_error=sheet_error)
+    if sheet_error and not companies:
+        return result
+
     candidates = collect_board_candidates_from_jobs(session)
 
     # (a) Boards already evidenced by job postings — unique by platform|region|token.
     job_boards: list[BoardRef] = []
-    seen: set[str] = set()
+    seen_job: set[str] = set()
     for cand in candidates:
         ref = BoardRef(
             platform=cand.platform,
@@ -205,9 +236,9 @@ def resolve_company_boards(
             company=cand.company_name or cand.board_token,
             region=cand.region,
         )
-        if ref.key in seen:
+        if ref.key in seen_job:
             continue
-        seen.add(ref.key)
+        seen_job.add(ref.key)
         job_boards.append(ref)
 
     # (b) Referral sheet companies that match a job-derived board token/company.
@@ -216,9 +247,67 @@ def resolve_company_boards(
     if companies:
         sheet_boards, unresolved = resolve_boards_for_companies(companies, candidates)
 
+    # (c) Careers resolver for still-unresolved referral companies.
+    careers_boards: list[BoardRef] = []
+    newly_resolved: list[BoardRef] = []
+    if use_careers_resolver and unresolved:
+        from packages.core.services.board_discovery.careers_resolver import (
+            resolve_referral_companies_via_careers,
+        )
+        from packages.core.services.board_discovery.http_client import BoardHttpClient
+
+        still_needed = max(0, limit - len(sheet_boards))
+        careers_limit = min(len(unresolved), still_needed if still_needed else len(unresolved))
+        # Always attempt careers resolve for unresolved referral companies up to
+        # the pilot limit (even if sheet_boards already filled some slots).
+        careers_limit = min(len(unresolved), max(0, limit))
+        client = careers_client if isinstance(careers_client, BoardHttpClient) else None
+        batch = resolve_referral_companies_via_careers(
+            session,
+            [u.company for u in unresolved],
+            limit=careers_limit,
+            client=client,
+            use_cache=True,
+            persist=persist_resolutions,
+        )
+        result.careers_resolved = len(batch.resolved)
+        resolved_names = {
+            normalize_company_key(hit.board.company) for hit in batch.resolved
+        }
+        for hit in batch.resolved:
+            careers_boards.append(hit.board)
+            if hit.method != "cache":
+                newly_resolved.append(hit.board)
+            else:
+                newly_resolved.append(hit.board)
+        # Replace unresolved entries that careers resolved; keep remaining reasons.
+        unresolved = [
+            u
+            for u in unresolved
+            if normalize_company_key(u.company) not in resolved_names
+        ]
+        # Prefer careers-batch unresolved reasons (more specific) for probed set.
+        probed_unresolved = {
+            normalize_company_key(u.company): u for u in batch.unresolved
+        }
+        merged_unresolved: list[UnresolvedCompany] = []
+        seen_u: set[str] = set()
+        for u in unresolved:
+            key = normalize_company_key(u.company)
+            if key in seen_u:
+                continue
+            seen_u.add(key)
+            merged_unresolved.append(probed_unresolved.get(key, u))
+        # Companies probed but not in original unresolved shouldn't happen.
+        for key, u in probed_unresolved.items():
+            if key not in seen_u:
+                merged_unresolved.append(u)
+        unresolved = merged_unresolved
+
+    # Prefer referral-linked boards over incidental job-derived boards.
     merged: list[BoardRef] = []
     merged_keys: set[str] = set()
-    for ref in [*job_boards, *sheet_boards]:
+    for ref in [*sheet_boards, *careers_boards, *job_boards]:
         if ref.key in merged_keys:
             continue
         merged_keys.add(ref.key)
@@ -228,4 +317,7 @@ def resolve_company_boards(
 
     result.boards = merged
     result.unresolved = unresolved
+    result.newly_resolved_boards = newly_resolved
+    result.vendor_counts = _vendor_counts(merged)
+    result.unresolved_reason_counts = _unresolved_reason_counts(unresolved)
     return result

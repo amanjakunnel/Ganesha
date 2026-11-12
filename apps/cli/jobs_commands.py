@@ -378,6 +378,74 @@ def sync_simplifyjobs_cmd(
         session.close()
 
 
+@jobs_app.command(name="resolve-company-boards")
+def resolve_company_boards_cmd(
+    dry_run: bool = typer.Option(
+        True,
+        "--dry-run/--apply",
+        help="Preview by default; --apply persists resolutions under ~/.ganesha/",
+    ),
+    limit: int = typer.Option(40, "--limit", help="Max referral companies / boards"),
+    sync_new: bool = typer.Option(
+        False,
+        "--sync-new/--no-sync-new",
+        help="After resolve, sync jobs only for newly resolved boards",
+    ),
+) -> None:
+    """Resolve referral companies to ATS boards (job URLs + careers probes)."""
+    from packages.core.services.board_discovery.company_resolution import (
+        resolve_company_boards,
+    )
+    from packages.core.services.board_discovery import sync_company_boards
+
+    session: Session = SessionLocal()
+    try:
+        result = resolve_company_boards(
+            session,
+            limit=limit,
+            use_careers_resolver=True,
+            persist_resolutions=not dry_run,
+        )
+        typer.echo(
+            "Resolve company boards: "
+            f"dry_run={dry_run} companies={len(result.companies)} "
+            f"boards={len(result.boards)} careers_resolved={result.careers_resolved} "
+            f"unresolved={len(result.unresolved)}"
+        )
+        if result.sheet_error:
+            typer.echo(f"  sheet_error: {result.sheet_error}")
+        typer.echo("  vendor_counts:")
+        for vendor, count in sorted((result.vendor_counts or {}).items()):
+            typer.echo(f"    {vendor}: {count}")
+        typer.echo("  unresolved_reasons:")
+        for reason, count in sorted((result.unresolved_reason_counts or {}).items()):
+            typer.echo(f"    {reason}: {count}")
+        for ref in result.boards[:20]:
+            typer.echo(
+                f"  board: {ref.platform}/{ref.board_token} "
+                f"company={ref.company}"
+            )
+        for u in result.unresolved[:20]:
+            typer.echo(f"  unresolved: {u.company} ({u.reason})")
+        if not dry_run and sync_new and result.newly_resolved_boards:
+            sync_result = sync_company_boards(
+                session,
+                dry_run=False,
+                limit=limit,
+                boards=result.newly_resolved_boards,
+            )
+            session.commit()
+            typer.echo(
+                "Synced newly resolved: "
+                f"boards_ok={sync_result.boards_ok}/{sync_result.boards_attempted} "
+                f"new={sync_result.new} updated={sync_result.updated}"
+            )
+        elif not dry_run:
+            session.commit()
+    finally:
+        session.close()
+
+
 @jobs_app.command(name="sync-company-boards")
 def sync_company_boards_cmd(
     dry_run: bool = typer.Option(
@@ -403,7 +471,10 @@ def sync_company_boards_cmd(
     session: Session = SessionLocal()
     try:
         result = sync_company_boards(
-            session, dry_run=dry_run, limit=effective_limit
+            session,
+            dry_run=dry_run,
+            limit=effective_limit,
+            persist_resolutions=not dry_run,
         )
         if not dry_run:
             session.commit()
@@ -422,6 +493,103 @@ def sync_company_boards_cmd(
             typer.echo(f"  unresolved: {u.company} ({u.reason})")
         for err in result.errors[:10]:
             typer.echo(f"  error: {err}")
+    finally:
+        session.close()
+
+
+@jobs_app.command(name="gmail-diagnose")
+def gmail_diagnose_cmd(
+    days: int | None = typer.Option(
+        None,
+        "--days",
+        help="Override search window; default covers saved_only span",
+    ),
+) -> None:
+    """Aggregate-only Gmail confirmation diagnosis (domains + counts; no persist)."""
+    from packages.core.services.gmail_application_match import diagnose_gmail_preview
+
+    session: Session = SessionLocal()
+    try:
+        result = diagnose_gmail_preview(session, days=days)
+        data = result.to_dict()
+        if data.get("setup_required"):
+            typer.echo(data.get("setup_message") or "Gmail setup required")
+            raise typer.Exit(code=2)
+        typer.echo(
+            "Gmail diagnose: "
+            f"scanned={data['scanned']} matched={data['matched']} "
+            f"low_confidence={data['low_confidence']} "
+            f"unmatched={data['unmatched_aggregate']} "
+            f"confirmation_looking={data['confirmation_looking']} "
+            f"saved_only={data['saved_only_count']}"
+        )
+        search = data.get("search") or {}
+        typer.echo(
+            f"  search days={search.get('days')} max_results={search.get('max_results')} "
+            f"page_token_paging={search.get('page_token_paging')}"
+        )
+        typer.echo(f"  query={search.get('query')}")
+        span = data.get("saved_only_date_span") or {}
+        typer.echo(f"  saved_only_span min={span.get('min')} max={span.get('max')}")
+        typer.echo("  sender_domain_histogram:")
+        for domain, count in (data.get("sender_domain_histogram") or {}).items():
+            typer.echo(f"    {domain}: {count}")
+        for line in data.get("explanation") or []:
+            typer.echo(f"  note: {line}")
+    finally:
+        session.close()
+
+
+@jobs_app.command(name="gmail-preview")
+def gmail_preview_cmd(
+    days: int | None = typer.Option(
+        None,
+        "--days",
+        help="Search window days (default: cover saved_only span)",
+    ),
+    persist: bool = typer.Option(
+        False,
+        "--persist/--no-persist",
+        help="Persist only when explicitly set AND matches>0 (default: false)",
+    ),
+) -> None:
+    """Preview Gmail confirmation matches (aggregates; default no persist)."""
+    from packages.core.services.gmail_application_match import preview_gmail_matches
+
+    session: Session = SessionLocal()
+    try:
+        # Always preview first; only persist when asked and matches exist.
+        preview = preview_gmail_matches(session, days=days, persist=False)
+        data = preview.to_dict()
+        if data.get("setup_required"):
+            typer.echo(data.get("setup_message") or "Gmail setup required")
+            raise typer.Exit(code=2)
+        total_hits = int(data["matched"]) + int(data["low_confidence"])
+        typer.echo(
+            "Gmail preview: "
+            f"scanned={data['scanned']} matched={data['matched']} "
+            f"low_confidence={data['low_confidence']} "
+            f"unmatched={data['unmatched_aggregate']} persist=False"
+        )
+        search = data.get("search") or {}
+        typer.echo(
+            f"  search days={search.get('days')} query={search.get('query')}"
+        )
+        for match in (data.get("matches") or [])[:20]:
+            typer.echo(
+                f"  hit: domain={match.get('sender_domain')} "
+                f"company={match.get('matched_company')} "
+                f"conf={match.get('confidence')}"
+            )
+        if persist and total_hits > 0:
+            applied = preview_gmail_matches(session, days=days, persist=True)
+            session.commit()
+            typer.echo(
+                "Gmail persist: "
+                f"matched={applied.matched} low_confidence={applied.low_confidence}"
+            )
+        elif persist:
+            typer.echo("Gmail persist skipped: matches=0")
     finally:
         session.close()
 
@@ -507,9 +675,27 @@ def enrich_descriptions_cmd(
     force: bool = typer.Option(
         False, "--force", help="Re-fetch even when description already looks full"
     ),
+    eligible_fit_bands: str | None = typer.Option(
+        None,
+        "--eligible-fit-bands",
+        help=(
+            "Comma-separated evidence_fit bands to include "
+            "(e.g. recommended,stretch). Skips excluded eligibility. "
+            "Example: jobs enrich-descriptions --apply --limit 40 "
+            "--eligible-fit-bands recommended,stretch"
+        ),
+    ),
 ) -> None:
-    """Fetch full JDs for aggregator stubs (public GET only; bounded concurrency)."""
+    """Fetch full JDs for aggregator stubs (public GET only; bounded concurrency).
+
+    Bounded enrichment for role-pass recommended/stretch stubs:
+      jobs enrich-descriptions --apply --limit 40 --eligible-fit-bands recommended,stretch
+    """
     from packages.core.services.job_enrichment import enrich_jobs_batch
+
+    bands: set[str] | None = None
+    if eligible_fit_bands:
+        bands = {b.strip() for b in eligible_fit_bands.split(",") if b.strip()}
 
     session: Session = SessionLocal()
     try:
@@ -520,6 +706,8 @@ def enrich_descriptions_cmd(
             only_recent_days=recent_days,
             job_ids=[*job_id] if job_id else None,
             force=force,
+            eligible_fit_bands=bands,
+            skip_excluded=True,
         )
         if not dry_run:
             session.commit()
@@ -530,6 +718,7 @@ def enrich_descriptions_cmd(
             f"enriched={data['enriched']} unchanged={data['unchanged']} "
             f"skipped={data['skipped']} unavailable={data['unavailable']} "
             f"failed={data['failed']} title_drift={data['title_drift']}"
+            + (f" fit_bands={sorted(bands)}" if bands else "")
         )
         for outcome in data.get("outcomes") or []:
             typer.echo(

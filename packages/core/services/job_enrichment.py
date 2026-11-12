@@ -923,8 +923,15 @@ def _priority_candidates(
     limit: int,
     only_recent_days: int | None = 7,
     include_feed_candidates: bool = True,
+    eligible_fit_bands: set[str] | None = None,
+    skip_excluded: bool = True,
 ) -> list[JobPosting]:
-    """Prefer default-feed-ish recent stubs, then other stubs."""
+    """Prefer default-feed-ish recent stubs, then other stubs.
+
+    When ``eligible_fit_bands`` is set (e.g. recommended,stretch), only stubs
+    whose stored evidence_fit.band is in that set are returned. Excluded
+    eligibility is skipped by default.
+    """
     from sqlalchemy import or_
 
     from packages.core.services.evidence_fit_service import (
@@ -934,6 +941,7 @@ def _priority_candidates(
     )
     from packages.core.services.job_eligibility import (
         ELIGIBILITY_ACTIONABLE,
+        ELIGIBILITY_EXCLUDED,
         ELIGIBILITY_NEEDS_REVIEW,
         eligibility_from_metadata,
     )
@@ -958,6 +966,20 @@ def _priority_candidates(
     # Oversample then filter with stub heuristics / already-enriched skip.
     rows = q.limit(max(limit * 40, 400)).all()
     stubs = [j for j in rows if job_needs_enrichment(j)]
+
+    if skip_excluded or eligible_fit_bands:
+        filtered: list[JobPosting] = []
+        for job in stubs:
+            elig = eligibility_from_metadata(job.intake_metadata)
+            if skip_excluded and elig.result == ELIGIBILITY_EXCLUDED:
+                continue
+            if eligible_fit_bands is not None:
+                fit = get_stored_fit(job) or {}
+                band = str(fit.get("band") or "")
+                if band not in eligible_fit_bands:
+                    continue
+            filtered.append(job)
+        stubs = filtered
 
     def _score(job: JobPosting) -> tuple[int, float]:
         score = 0
@@ -995,6 +1017,8 @@ def enrich_jobs_batch(
     only_recent_days: int | None = 7,
     job_ids: list[str] | None = None,
     force: bool = False,
+    eligible_fit_bands: set[str] | None = None,
+    skip_excluded: bool = True,
 ) -> EnrichmentBatchResult:
     result = EnrichmentBatchResult(dry_run=dry_run)
     if job_ids:
@@ -1005,7 +1029,11 @@ def enrich_jobs_batch(
         )
     else:
         jobs = _priority_candidates(
-            session, limit=limit, only_recent_days=only_recent_days
+            session,
+            limit=limit,
+            only_recent_days=only_recent_days,
+            eligible_fit_bands=eligible_fit_bands,
+            skip_excluded=skip_excluded,
         )
     result.scanned = len(jobs)
     with EnrichmentHttpClient() as client:
