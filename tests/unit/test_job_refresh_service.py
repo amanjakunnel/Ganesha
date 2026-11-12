@@ -116,10 +116,16 @@ def test_per_source_failure_surface() -> None:
         state, code = start_refresh()
         assert code == 202
 
+    from packages.core.services.board_discovery.sync import CompanyBoardSyncResult
+
     with (
         patch(
             "packages.core.services.job_refresh_service.sync_simplifyjobs",
             side_effect=SimplifyJobsFetchError("network down"),
+        ),
+        patch(
+            "packages.core.services.job_refresh_service.sync_company_boards",
+            return_value=CompanyBoardSyncResult(dry_run=False),
         ),
         patch(
             "packages.core.services.job_refresh_service.SessionLocal"

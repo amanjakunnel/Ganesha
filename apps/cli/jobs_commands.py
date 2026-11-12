@@ -377,6 +377,54 @@ def sync_simplifyjobs_cmd(
         session.close()
 
 
+@jobs_app.command(name="sync-company-boards")
+def sync_company_boards_cmd(
+    dry_run: bool = typer.Option(
+        True,
+        "--dry-run/--apply",
+        help="Preview by default; pass --apply to write",
+    ),
+    limit: int | None = typer.Option(
+        None,
+        "--limit",
+        help="Max referral companies to check (default: settings / 25)",
+    ),
+) -> None:
+    """Discover jobs from Greenhouse / Lever / Ashby boards for referral companies."""
+    from packages.core.services.board_discovery import sync_company_boards
+    from packages.core.settings import settings
+
+    effective_limit = (
+        limit
+        if limit is not None
+        else int(settings.company_board_discovery_max_companies)
+    )
+    session: Session = SessionLocal()
+    try:
+        result = sync_company_boards(
+            session, dry_run=dry_run, limit=effective_limit
+        )
+        if not dry_run:
+            session.commit()
+        typer.echo(
+            "Company board sync: "
+            f"dry_run={result.dry_run} companies_checked={result.companies_checked} "
+            f"boards_ok={result.boards_ok}/{result.boards_attempted} "
+            f"fetched={result.fetched} new={result.new} updated={result.updated} "
+            f"closed={result.closed} unresolved={len(result.unresolved)} "
+            f"errors={len(result.errors)}"
+        )
+        for note in (result.notes or [])[:10]:
+            typer.echo(f"  note: {note}")
+        for u in result.unresolved[:15]:
+            # Company name + reason only — never contact PII.
+            typer.echo(f"  unresolved: {u.company} ({u.reason})")
+        for err in result.errors[:10]:
+            typer.echo(f"  error: {err}")
+    finally:
+        session.close()
+
+
 @jobs_app.command(name="reassess-fit")
 def reassess_fit_cmd(
     dry_run: bool = typer.Option(

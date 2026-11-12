@@ -21,6 +21,7 @@ from packages.core.db import SessionLocal
 from packages.core.domain.models import AuditEvent, JobPosting
 from packages.core.services.job_eligibility import ELIGIBILITY_EXCLUDED
 from packages.core.services.job_recency import ensure_first_seen_metadata
+from packages.core.services.board_discovery import sync_company_boards
 from packages.core.services.simplifyjobs_sync import (
     SimplifyJobsFetchError,
     sync_simplifyjobs,
@@ -46,10 +47,14 @@ class SourceRefreshResult:
     new: int = 0
     updated: int = 0
     closed: int = 0
+    companies_checked: int = 0
     errors: list[str] = field(default_factory=list)
     error_summary: str | None = None
     last_sync: str | None = None
     duration_ms: int | None = None
+
+
+_LIVE_SOURCE_KINDS = frozenset({"github_sync", "board_api"})
 
 
 @dataclass
@@ -180,10 +185,14 @@ def start_refresh(*, force: bool = False) -> tuple[RefreshJobState, int]:
                 SourceRefreshResult(
                     source_id=sid,
                     label=str(cfg["label"]),
-                    status="running" if sid == "simplifyjobs" else "skipped",
+                    status=(
+                        "running"
+                        if cfg["kind"] in _LIVE_SOURCE_KINDS
+                        else "skipped"
+                    ),
                     error_summary=(
                         None
-                        if sid == "simplifyjobs"
+                        if cfg["kind"] in _LIVE_SOURCE_KINDS
                         else "Static local import — not re-fetched on refresh"
                     ),
                 )
@@ -246,8 +255,37 @@ def _run_refresh(refresh_id: str) -> None:
             sj.error_summary = f"{exc.__class__.__name__}: {exc}"[:240]
             sj.duration_ms = int((time.monotonic() - t0) * 1000)
 
+        # --- company boards (Greenhouse / Lever / Ashby public APIs) ---
+        _set_progress(state, "Syncing company boards…")
+        cb = next(s for s in state.sources if s.source_id == "company_boards")
+        t1 = time.monotonic()
+        try:
+            if time.monotonic() - started > timeout:
+                raise TimeoutError("Refresh exceeded timeout before company board sync")
+            board_result = sync_company_boards(session, dry_run=False)
+            session.commit()
+            cb.status = "success"
+            cb.companies_checked = board_result.companies_checked
+            cb.fetched = board_result.fetched
+            cb.new = board_result.new
+            cb.updated = board_result.updated
+            cb.closed = board_result.closed
+            if board_result.errors:
+                cb.errors = [str(e) for e in board_result.errors[:5]]
+                cb.error_summary = (
+                    f"{len(board_result.errors)} board/row error(s); sync continued"
+                )
+            cb.duration_ms = int((time.monotonic() - t1) * 1000)
+            cb.last_sync = datetime.now(UTC).isoformat()
+            created_ids.extend(board_result.created_ids or [])
+        except Exception as exc:
+            session.rollback()
+            cb.status = "failed"
+            cb.error_summary = f"{exc.__class__.__name__}: {exc}"[:240]
+            cb.duration_ms = int((time.monotonic() - t1) * 1000)
+
         for src in state.sources:
-            if src.source_id == "simplifyjobs":
+            if src.source_id in ("simplifyjobs", "company_boards"):
                 continue
             src.status = "skipped"
             last = _last_sync_at(session, src.source_id)
@@ -264,7 +302,7 @@ def _run_refresh(refresh_id: str) -> None:
             session.commit()
         state.fit_assessed = fit_n
 
-        failed = sj.status == "failed"
+        failed = sj.status == "failed" or cb.status == "failed"
         state.status = "failed" if failed else "completed"
         state.message = (
             "One or more sources failed; see per-source results."
@@ -318,7 +356,7 @@ def _source_status_snapshot(session: Session) -> list[dict[str, Any]]:
         last = _last_sync_at(session, source_id)
         # Prefer freshest signal: audit sync_completed OR max scraped_at (Python clock).
         max_scraped = None
-        if source_id == "simplifyjobs":
+        if source_id in ("simplifyjobs", "company_boards"):
             from sqlalchemy import func
 
             max_scraped = (
@@ -333,6 +371,10 @@ def _source_status_snapshot(session: Session) -> list[dict[str, Any]]:
         if effective is not None:
             age_hours = (datetime.now(UTC) - effective).total_seconds() / 3600.0
             is_stale = age_hours > stale_threshold_hours()
+        if source_id in ("simplifyjobs", "company_boards"):
+            status = "live (manual / dashboard refresh)"
+        else:
+            status = "static local import"
         out.append(
             {
                 "source_id": source_id,
@@ -341,11 +383,7 @@ def _source_status_snapshot(session: Session) -> list[dict[str, Any]]:
                 "last_sync": effective.isoformat() if effective else None,
                 "age_hours": round(age_hours, 2) if age_hours is not None else None,
                 "is_stale": is_stale,
-                "status": (
-                    "live (manual / dashboard refresh)"
-                    if source_id == "simplifyjobs"
-                    else "static local import"
-                ),
+                "status": status,
             }
         )
     return out

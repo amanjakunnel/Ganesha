@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     # Live referral contacts Google Sheet (link-view CSV export). Contents stay out of git.
     referral_sheet_id: str = "1GWWHljxgghvhCtQRkIlV-hfC9RoKcgGgj5PDFR6NDVM"
     referral_sheet_gid: str = "0"
+    # Company board discovery pilot (Greenhouse / Lever / Ashby public APIs).
+    company_board_discovery_max_companies: int = 25
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"

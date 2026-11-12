@@ -1,0 +1,34 @@
+[
+  {
+    "id": "lever-job-1",
+    "text": "Backend Engineer",
+    "categories": {
+      "location": "Seattle, WA",
+      "commitment": "Full-time",
+      "team": "Engineering",
+      "department": "Product",
+      "allLocations": ["Seattle, WA", "Remote"]
+    },
+    "country": "US",
+    "openingPlain": "Build APIs.",
+    "descriptionPlain": "Build APIs for our United States customers. Full-time software engineer role.",
+    "hostedUrl": "https://jobs.lever.co/acme/lever-job-1",
+    "applyUrl": "https://jobs.lever.co/acme/lever-job-1/apply",
+    "workplaceType": "hybrid"
+  },
+  {
+    "id": "lever-job-2",
+    "text": "Product Designer",
+    "categories": {
+      "location": "New York, NY",
+      "commitment": "Full-time",
+      "team": "Design",
+      "allLocations": ["New York, NY"]
+    },
+    "country": "US",
+    "descriptionPlain": "Design product surfaces for US users.",
+    "hostedUrl": "https://jobs.lever.co/acme/lever-job-2",
+    "applyUrl": "https://jobs.lever.co/acme/lever-job-2/apply",
+    "workplaceType": "on-site"
+  }
+]
