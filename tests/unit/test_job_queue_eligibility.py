@@ -80,7 +80,11 @@ def test_build_ranked_queue_defaults_to_actionable_only() -> None:
             source_import_key="test-canada",
             location="Vancouver, BC, Canada",
         )
-        actionable = build_ranked_queue(session, limit=10)
+        actionable = [
+            item
+            for item in build_ranked_queue(session, limit=50)
+            if item.company_name == "QueueTestCo"
+        ]
         assert len(actionable) == 1
         assert actionable[0].job.title == "Actionable Role"
     finally:

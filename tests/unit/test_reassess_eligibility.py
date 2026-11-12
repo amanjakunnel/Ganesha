@@ -18,6 +18,7 @@ from packages.core.services.job_eligibility import (
     ELIGIBILITY_EXCLUDED,
     ELIGIBILITY_POLICY_VERSION,
     reassess_eligibility,
+    resolve_job_eligibility,
 )
 
 
@@ -83,5 +84,14 @@ def test_reassess_excludes_internship_and_preserves_application() -> None:
         session.refresh(app)
         assert app.notes == "keep me"
         assert session.query(JobApplication).count() == 1
+
+        # Idempotent under the same policy version.
+        again = reassess_eligibility(session, dry_run=False)
+        session.commit()
+        assert again["policy_version"] == ELIGIBILITY_POLICY_VERSION
+        assert again["stale_policy"] == 0
+        session.refresh(job)
+        assert job.intake_metadata["eligibility"]["result"] == ELIGIBILITY_EXCLUDED
+        assert resolve_job_eligibility(job).reason_category == "internship_role"
     finally:
         session.close()

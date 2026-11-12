@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import List, Optional
 
 import typer
 from sqlalchemy.orm import Session
@@ -487,6 +488,57 @@ def reassess_eligibility_cmd(
             typer.echo("  (none)")
         for key, count in reasons.items():
             typer.echo(f"  {key}: {count}")
+    finally:
+        session.close()
+
+
+@jobs_app.command(name="enrich-descriptions")
+def enrich_descriptions_cmd(
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--apply", help="Preview by default; pass --apply to write"
+    ),
+    limit: int = typer.Option(25, "--limit", help="Max jobs to enrich this run"),
+    recent_days: int | None = typer.Option(
+        7, "--recent-days", help="Prefer stubs from the last N days (None = no cutoff)"
+    ),
+    job_id: Optional[List[str]] = typer.Option(
+        None, "--job-id", help="Enrich specific job id(s); can repeat"
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Re-fetch even when description already looks full"
+    ),
+) -> None:
+    """Fetch full JDs for aggregator stubs (public GET only; bounded concurrency)."""
+    from packages.core.services.job_enrichment import enrich_jobs_batch
+
+    session: Session = SessionLocal()
+    try:
+        result = enrich_jobs_batch(
+            session,
+            limit=limit,
+            dry_run=dry_run,
+            only_recent_days=recent_days,
+            job_ids=[*job_id] if job_id else None,
+            force=force,
+        )
+        if not dry_run:
+            session.commit()
+        data = result.to_dict()
+        typer.echo(
+            "JD enrichment: "
+            f"dry_run={data['dry_run']} scanned={data['scanned']} "
+            f"enriched={data['enriched']} unchanged={data['unchanged']} "
+            f"skipped={data['skipped']} unavailable={data['unavailable']} "
+            f"failed={data['failed']} title_drift={data['title_drift']}"
+        )
+        for outcome in data.get("outcomes") or []:
+            typer.echo(
+                f"  {outcome['job_id'][:8]}… status={outcome['status']} "
+                f"provider={outcome.get('provider')} "
+                f"title_updated={outcome.get('title_updated')} "
+                f"elig={outcome.get('eligibility_result')} "
+                f"reason={outcome.get('reason')}"
+            )
     finally:
         session.close()
 

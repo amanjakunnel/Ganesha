@@ -23,8 +23,10 @@ from packages.core.services.job_display import source_display_label
 from packages.core.services.job_eligibility import (
     ELIGIBILITY_ACTIONABLE,
     ELIGIBILITY_EXCLUDED,
+    enrichment_badge,
     resolve_job_eligibility,
 )
+from packages.core.services.job_enrichment import description_verified as jd_verified
 from packages.core.services.evidence_fit_service import (
     BAND_LOW_FIT,
     BAND_NEEDS_REVIEW,
@@ -106,6 +108,10 @@ def to_dashboard_item(
         fit_reason=fit.get("short_reason"),
         fit_confidence=fit.get("confidence"),
         eligibility=eligibility.result,
+        eligibility_reason=eligibility.reason_category,
+        eligibility_flags=list(eligibility.flags),
+        description_verified=jd_verified(job),
+        description_badge=enrichment_badge(job),
         recency_at=recency.get("recency_at"),
         recency_label=recency.get("recency_label"),
         first_seen_at=first_seen_at(job),

@@ -334,6 +334,15 @@ def prepare_attempt(
     acknowledge_fit_warning: bool = False,
     acknowledge_previous_application: bool = False,
 ) -> ApplicationAttempt:
+    # Enrich stub JDs before packaging so eligibility uses the best available text.
+    from packages.core.domain.models import JobPosting
+    from packages.core.services.job_enrichment import enrich_job, job_needs_enrichment
+
+    job = session.query(JobPosting).filter(JobPosting.id == job_id).one_or_none()
+    if job is not None and job_needs_enrichment(job):
+        enrich_job(session, job, dry_run=False)
+        session.flush()
+
     preview = prepare_preview(session, job_id)
     if not preview.can_prepare:
         raise AttemptBlockedError(preview.block_reason or "Cannot prepare application.")
