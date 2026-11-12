@@ -265,9 +265,33 @@ def _run_refresh(refresh_id: str) -> None:
         try:
             if time.monotonic() - started > timeout:
                 raise TimeoutError("Refresh exceeded timeout before company board sync")
+
+            def _on_board_progress(info: dict[str, Any]) -> None:
+                if time.monotonic() - started > timeout:
+                    raise TimeoutError(
+                        "Refresh exceeded timeout during company board sync"
+                    )
+                company = info.get("company") or "?"
+                platform = info.get("platform") or "?"
+                status = info.get("status") or "…"
+                fetched = int(info.get("fetched") or 0)
+                _set_progress(
+                    state,
+                    f"Board {platform}/{company}: {status} ({fetched} jobs)…",
+                )
+
+            board_timeout = float(
+                getattr(settings, "company_board_fetch_timeout_seconds", 90) or 90
+            )
             # Bound board sync on Refresh so one click cannot pin Postgres for
             # every resolved board; CLI remains available for larger runs.
-            board_result = sync_company_boards(session, dry_run=False, limit=25)
+            board_result = sync_company_boards(
+                session,
+                dry_run=False,
+                limit=25,
+                board_timeout_seconds=board_timeout,
+                on_board_progress=_on_board_progress,
+            )
             session.commit()
             cb.status = "success"
             cb.companies_checked = board_result.companies_checked

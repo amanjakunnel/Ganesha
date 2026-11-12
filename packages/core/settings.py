@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     referral_sheet_gid: str = "0"
     # Company board discovery pilot (Greenhouse / Lever / Ashby public APIs).
     company_board_discovery_max_companies: int = 25
+    company_board_fetch_timeout_seconds: int = 90
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
