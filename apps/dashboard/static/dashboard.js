@@ -165,7 +165,7 @@
       fitCounts.textContent =
         `Recommended ${counts.recommended || 0} · Stretch ${counts.stretch || 0} · ` +
         `Needs review ${counts.needs_review || 0} · Low fit ${counts.low_fit || 0} · ` +
-        `Eligible ${counts.all_eligible || 0}`;
+        `Other roles ${counts.other_roles || 0} · Eligible ${counts.all_eligible || 0}`;
     }
 
     function renderRecencyCounts(counts) {
@@ -186,6 +186,18 @@
         const reason = job.fit_reason
           ? `<div class="fit-reason muted">${escapeHtml(job.fit_reason)}</div>`
           : "";
+        const roleNote =
+          job.role_family_status === "role_family_mismatch"
+            ? `<div class="fit-reason muted">Other role${
+                job.role_matched_family
+                  ? " · matched " + escapeHtml(job.role_matched_family)
+                  : " · unmatched"
+              }</div>`
+            : job.role_matched_family
+              ? `<div class="fit-reason muted">Family: ${escapeHtml(
+                  job.role_matched_family
+                )}</div>`
+              : "";
         const newBadge = job.is_new_since_refresh
           ? `<span class="new-badge">New</span>`
           : "";
@@ -195,7 +207,7 @@
         const recencyLabel = job.recency_label || "First seen";
         const recencyDate = formatDate(job.recency_at || job.date_found);
         tr.innerHTML = `
-          <td class="title-cell" data-label="Title">${titleHtml}${newBadge}${verifyBadge}${reason}</td>
+          <td class="title-cell" data-label="Title">${titleHtml}${newBadge}${verifyBadge}${reason}${roleNote}</td>
           <td data-label="Company">${escapeHtml(job.company)}</td>
           <td data-label="Fit">${fitBadge(job.fit_band, job.fit_score)}</td>
           <td data-label="Location"><span class="location-label">${escapeHtml(job.location)}</span></td>

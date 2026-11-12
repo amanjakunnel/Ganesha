@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Role profile — Ganesha</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-text">
+      <h1>Role profile</h1>
+      <p class="subtitle">Derived from resume evidence. Stored under ~/.ganesha/role_profile.json. User overrides win on merge.</p>
+    </div>
+    <p><a class="btn" href="/">← Jobs</a></p>
+  </header>
+  <main>
+    <p id="meta" class="muted">Loading…</p>
+    <form id="add-form" class="filters" style="flex-wrap:wrap;margin-bottom:1.5rem">
+      <div class="filter-field"><label>Custom family id</label><input name="id" required placeholder="e.g. data_eng"></div>
+      <div class="filter-field"><label>Label</label><input name="label" required placeholder="Data Engineering"></div>
+      <div class="filter-field"><label>Title pattern (regex)</label><input name="title_pattern" placeholder="data engineer"></div>
+      <div class="filter-field"><label>Keywords (comma-separated)</label><input name="keywords" placeholder="spark, etl, warehouse"></div>
+      <button type="submit" class="btn primary">Add family</button>
+      <button type="button" class="btn" id="refresh-btn">Re-derive from evidence</button>
+    </form>
+    <p id="status" class="muted"></p>
+    <div class="table-wrap">
+      <table class="jobs-table">
+        <thead>
+          <tr>
+            <th>Family</th>
+            <th>Source</th>
+            <th>Enabled</th>
+            <th>Evidence</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </main>
+  <script>
+    function esc(v){return String(v||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+    async function load(){
+      const data = await (await fetch("/api/role-profile")).json();
+      document.getElementById("meta").textContent =
+        `version ${data.version||1} · evidence_hash ${data.evidence_hash||"—"} · ${
+          (data.families||[]).length
+        } families`;
+      const tbody = document.getElementById("rows");
+      tbody.innerHTML = "";
+      for (const f of data.families||[]) {
+        const tr = document.createElement("tr");
+        const excerpts = (f.evidence_excerpts||[]).slice(0,2).map(esc).join("<br>");
+        tr.innerHTML = `<td><strong>${esc(f.label)}</strong><div class="muted">${esc(f.id)}</div></td>
+          <td>${esc(f.source||"derived")}</td>
+          <td><label><input type="checkbox" class="tog" data-id="${esc(f.id)}" ${f.enabled?"checked":""}> enabled</label></td>
+          <td class="muted">${excerpts||"—"}</td>
+          <td><button type="button" class="btn rem" data-id="${esc(f.id)}">Remove</button></td>`;
+        tbody.appendChild(tr);
+      }
+      tbody.querySelectorAll(".tog").forEach(el => el.addEventListener("change", async () => {
+        const res = await fetch("/api/role-profile/toggle", {
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({id: el.dataset.id, enabled: el.checked})
+        });
+        const body = await res.json();
+        document.getElementById("status").textContent = res.ok ? "Saved." : (body.error||"Failed");
+        if (res.ok) load();
+      }));
+      tbody.querySelectorAll(".rem").forEach(btn => btn.addEventListener("click", async () => {
+        const res = await fetch("/api/role-profile/remove", {
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({id: btn.dataset.id})
+        });
+        const body = await res.json();
+        document.getElementById("status").textContent = res.ok ? "Removed." : (body.error||"Failed");
+        if (res.ok) load();
+      }));
+    }
+    document.getElementById("add-form").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const fd = new FormData(ev.target);
+      const body = {
+        id: String(fd.get("id")||"").trim(),
+        label: String(fd.get("label")||"").trim(),
+        title_patterns: String(fd.get("title_pattern")||"").trim() ? [String(fd.get("title_pattern")).trim()] : [],
+        responsibility_keywords: String(fd.get("keywords")||"").split(",").map(s=>s.trim()).filter(Boolean),
+      };
+      const res = await fetch("/api/role-profile/add", {
+        method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      document.getElementById("status").textContent = res.ok ? "Added." : (data.error||"Failed");
+      if (res.ok) { ev.target.reset(); load(); }
+    });
+    document.getElementById("refresh-btn").addEventListener("click", async () => {
+      const res = await fetch("/api/role-profile/refresh", {method:"POST"});
+      const data = await res.json();
+      document.getElementById("status").textContent = res.ok ? "Re-derived." : (data.error||"Failed");
+      if (res.ok) load();
+    });
+    load();
+  </script>
+</body>
+</html>

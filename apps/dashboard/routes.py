@@ -907,6 +907,168 @@ def answer_bank_page(request: Request) -> HTMLResponse:
     )
 
 
+class RoleFamilyBody(BaseModel):
+    id: str
+    label: str
+    title_patterns: list[str] = []
+    responsibility_keywords: list[str] = []
+
+
+class RoleToggleBody(BaseModel):
+    id: str
+    enabled: bool = True
+
+
+class RoleRemoveBody(BaseModel):
+    id: str
+
+
+@router.get("/api/role-profile")
+def api_role_profile_get(
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    from packages.core.services.role_profile import load_role_profile
+
+    try:
+        check_database(session)
+        profile = load_role_profile(session)
+        return JSONResponse(profile.to_dict())
+    except Exception as exc:
+        if is_database_unavailable(exc):
+            return JSONResponse(
+                {"error": DB_UNAVAILABLE_MESSAGE},
+                status_code=503,
+            )
+        raise
+
+
+@router.post("/api/role-profile/refresh")
+def api_role_profile_refresh(
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    from packages.core.services.role_profile import load_role_profile
+
+    try:
+        check_database(session)
+        profile = load_role_profile(session, refresh=True)
+        return JSONResponse(profile.to_dict())
+    except Exception as exc:
+        if is_database_unavailable(exc):
+            return JSONResponse(
+                {"error": DB_UNAVAILABLE_MESSAGE},
+                status_code=503,
+            )
+        raise
+
+
+@router.post("/api/role-profile/add")
+def api_role_profile_add(
+    body: RoleFamilyBody,
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    from packages.core.services.role_profile import (
+        RoleFamily,
+        UserOverrides,
+        load_role_profile,
+        save_role_profile_overrides,
+    )
+
+    fam_id = body.id.strip().lower().replace(" ", "_")
+    if not fam_id:
+        return JSONResponse({"error": "id required"}, status_code=400)
+    profile = load_role_profile(session)
+    overrides = profile.user_overrides
+    added = [
+        f for f in overrides.added_families if f.id != fam_id
+    ]
+    added.append(
+        RoleFamily(
+            id=fam_id,
+            label=body.label.strip() or fam_id,
+            title_patterns=list(body.title_patterns),
+            responsibility_keywords=list(body.responsibility_keywords),
+            enabled=True,
+            source="custom",
+        )
+    )
+    removed = [x for x in overrides.removed_ids if x != fam_id]
+    disabled = [x for x in overrides.disabled_ids if x != fam_id]
+    merged = save_role_profile_overrides(
+        UserOverrides(
+            disabled_ids=disabled,
+            removed_ids=removed,
+            added_families=added,
+        ),
+        session=session,
+    )
+    return JSONResponse(merged.to_dict(), status_code=201)
+
+
+@router.post("/api/role-profile/toggle")
+def api_role_profile_toggle(
+    body: RoleToggleBody,
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    from packages.core.services.role_profile import (
+        UserOverrides,
+        load_role_profile,
+        save_role_profile_overrides,
+    )
+
+    profile = load_role_profile(session)
+    overrides = profile.user_overrides
+    disabled = [x for x in overrides.disabled_ids if x != body.id]
+    if not body.enabled:
+        disabled.append(body.id)
+    # Re-enable also clears remove.
+    removed = [x for x in overrides.removed_ids if x != body.id]
+    merged = save_role_profile_overrides(
+        UserOverrides(
+            disabled_ids=disabled,
+            removed_ids=removed,
+            added_families=list(overrides.added_families),
+        ),
+        session=session,
+    )
+    return JSONResponse(merged.to_dict())
+
+
+@router.post("/api/role-profile/remove")
+def api_role_profile_remove(
+    body: RoleRemoveBody,
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    from packages.core.services.role_profile import (
+        UserOverrides,
+        load_role_profile,
+        save_role_profile_overrides,
+    )
+
+    profile = load_role_profile(session)
+    overrides = profile.user_overrides
+    removed = list(dict.fromkeys([*overrides.removed_ids, body.id]))
+    added = [f for f in overrides.added_families if f.id != body.id]
+    disabled = [x for x in overrides.disabled_ids if x != body.id]
+    merged = save_role_profile_overrides(
+        UserOverrides(
+            disabled_ids=disabled,
+            removed_ids=removed,
+            added_families=added,
+        ),
+        session=session,
+    )
+    return JSONResponse(merged.to_dict())
+
+
+@router.get("/role-profile", response_class=HTMLResponse)
+def role_profile_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "role_profile.html",
+        {"db_unavailable_message": DB_UNAVAILABLE_MESSAGE},
+    )
+
+
 @router.get("/api/review-queue")
 def api_review_queue(session: Session = Depends(get_session)) -> JSONResponse:
     from packages.core.domain.models import ApplicationAttempt

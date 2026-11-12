@@ -34,6 +34,10 @@ from packages.core.services.evidence_fit_service import (
     BAND_STRETCH,
     get_stored_fit,
 )
+from packages.core.services.role_profile import (
+    get_stored_role_block,
+    is_role_family_mismatch,
+)
 from packages.core.services.job_recency import (
     RecencyWindow,
     first_seen_at,
@@ -85,6 +89,7 @@ def to_dashboard_item(
 ) -> JobDashboardItem:
     source_value = source_value_for(job)
     fit = get_stored_fit(job) or {}
+    role_block = get_stored_role_block(job) or {}
     eligibility = resolve_job_eligibility(job)
     recency = job_recency_payload(job)
     is_new = is_new_since_refresh(
@@ -107,6 +112,14 @@ def to_dashboard_item(
         fit_score=fit.get("score"),
         fit_reason=fit.get("short_reason"),
         fit_confidence=fit.get("confidence"),
+        role_family_status=(
+            str(role_block["status"]) if role_block.get("status") else None
+        ),
+        role_matched_family=(
+            str(role_block["matched_family"])
+            if role_block.get("matched_family")
+            else None
+        ),
         eligibility=eligibility.result,
         eligibility_reason=eligibility.reason_category,
         eligibility_flags=list(eligibility.flags),
@@ -207,7 +220,18 @@ def list_available_sources(session: Session) -> list[SourceOption]:
 
 def _matches_fit_filter(job: JobPosting, fit: FitFeedFilter) -> bool:
     eligibility = resolve_job_eligibility(job)
+    if fit == FitFeedFilter.other_roles:
+        return is_role_family_mismatch(job)
     if fit != FitFeedFilter.all and eligibility.result == ELIGIBILITY_EXCLUDED:
+        return False
+    # Default feeds exclude Layer-1 role mismatches (never delete the jobs).
+    if fit in {
+        FitFeedFilter.recommended,
+        FitFeedFilter.recommended_stretch,
+        FitFeedFilter.needs_review,
+        FitFeedFilter.low_fit,
+        FitFeedFilter.all_eligible,
+    } and is_role_family_mismatch(job):
         return False
     band = (get_stored_fit(job) or {}).get("band")
     if fit == FitFeedFilter.all:
@@ -234,6 +258,9 @@ def _matches_fit_filter(job: JobPosting, fit: FitFeedFilter) -> bool:
 def compute_fit_counts(jobs: list[JobPosting]) -> FitBandCounts:
     counts = FitBandCounts()
     for job in jobs:
+        if is_role_family_mismatch(job):
+            counts.other_roles += 1
+            continue
         eligibility = resolve_job_eligibility(job)
         if eligibility.result == ELIGIBILITY_ACTIONABLE:
             counts.all_eligible += 1
