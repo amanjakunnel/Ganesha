@@ -35,9 +35,11 @@ from packages.core.services.evidence_fit_service import (
 from packages.core.services.job_recency import (
     RecencyWindow,
     first_seen_at,
+    is_new_since_refresh,
     is_within_window,
     job_recency_payload,
     recency_counts,
+    recency_timestamp,
 )
 from packages.core.services.job_refresh_service import (
     get_refresh_status,
@@ -83,13 +85,9 @@ def to_dashboard_item(
     fit = get_stored_fit(job) or {}
     eligibility = resolve_job_eligibility(job)
     recency = job_recency_payload(job)
-    is_new = False
-    if last_refresh_started_at is not None:
-        is_new = is_within_window(
-            job,
-            RecencyWindow.new_since_refresh,
-            last_refresh_started_at=last_refresh_started_at,
-        )
+    is_new = is_new_since_refresh(
+        job, last_refresh_started_at=last_refresh_started_at
+    )
     return JobDashboardItem(
         id=job.id,
         title=job.title,
@@ -270,11 +268,21 @@ def _matches_recency_filter(
 def _to_recency_counts(raw: dict[str, int]) -> RecencyCounts:
     return RecencyCounts(
         hours_24=raw.get("24h", 0),
-        days_3=raw.get("3d", 0),
+        hours_48=raw.get("48h", 0),
         days_7=raw.get("7d", 0),
+        days_30=raw.get("30d", 0),
         all=raw.get("all", 0),
-        new_since_refresh=raw.get("new_since_refresh", 0),
+        unknown_or_approx=raw.get("unknown_or_approx", 0),
     )
+
+
+def _recency_sort_key(job: JobPosting) -> datetime:
+    ts, _label = recency_timestamp(job)
+    if ts is None:
+        return datetime.min.replace(tzinfo=UTC)
+    if ts.tzinfo is None:
+        return ts.replace(tzinfo=UTC)
+    return ts.astimezone(UTC)
 
 
 def list_dashboard_jobs(session: Session, params: JobQueryParams) -> JobsListResponse:
@@ -308,7 +316,13 @@ def list_dashboard_jobs(session: Session, params: JobQueryParams) -> JobsListRes
             job, params.recency, last_refresh_started_at=last_refresh_started_at
         )
     ]
-    if params.sort == JobSort.fit_desc:
+    # Newest-first within selected filters uses the honest recency clock
+    # (posted_at, else first_seen), not scraped_at alone.
+    if params.sort == JobSort.date_desc:
+        filtered.sort(key=_recency_sort_key, reverse=True)
+    elif params.sort == JobSort.date_asc:
+        filtered.sort(key=_recency_sort_key)
+    elif params.sort == JobSort.fit_desc:
         filtered.sort(
             key=lambda job: int((get_stored_fit(job) or {}).get("score") or -1),
             reverse=True,

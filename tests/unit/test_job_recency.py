@@ -6,8 +6,10 @@ from types import SimpleNamespace
 from packages.core.services.job_recency import (
     RecencyWindow,
     ensure_first_seen_metadata,
+    is_new_since_refresh,
     is_within_window,
     measure_first_seen_skew,
+    recency_counts,
     recency_timestamp,
 )
 
@@ -24,7 +26,7 @@ def _job(**kwargs):
     return SimpleNamespace(**defaults)
 
 
-def test_prefers_posted_at_with_source_age_label() -> None:
+def test_prefers_posted_at_with_posted_label() -> None:
     posted = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
     job = _job(
         posted_at=posted,
@@ -33,7 +35,7 @@ def test_prefers_posted_at_with_source_age_label() -> None:
     )
     ts, label = recency_timestamp(job)
     assert ts == posted
-    assert label == "Posted (source age)"
+    assert label == "Posted"
 
 
 def test_falls_back_to_first_seen() -> None:
@@ -60,20 +62,48 @@ def test_24h_boundary_inclusive() -> None:
     )
 
 
+def test_48h_boundary_inclusive() -> None:
+    now = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
+    exact = now - timedelta(hours=48)
+    inside = now - timedelta(hours=47, minutes=59)
+    outside = now - timedelta(hours=48, seconds=1)
+    assert is_within_window(
+        _job(posted_at=exact), RecencyWindow.hours_48, now=now
+    )
+    assert is_within_window(
+        _job(posted_at=inside), RecencyWindow.hours_48, now=now
+    )
+    assert not is_within_window(
+        _job(posted_at=outside), RecencyWindow.hours_48, now=now
+    )
+
+
+def test_7d_boundary_inclusive() -> None:
+    now = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
+    exact = now - timedelta(days=7)
+    outside = now - timedelta(days=7, seconds=1)
+    assert is_within_window(_job(posted_at=exact), RecencyWindow.days_7, now=now)
+    assert not is_within_window(
+        _job(posted_at=outside), RecencyWindow.days_7, now=now
+    )
+
+
+def test_30d_boundary_inclusive() -> None:
+    now = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
+    exact = now - timedelta(days=30)
+    outside = now - timedelta(days=30, seconds=1)
+    assert is_within_window(_job(posted_at=exact), RecencyWindow.days_30, now=now)
+    assert not is_within_window(
+        _job(posted_at=outside), RecencyWindow.days_30, now=now
+    )
+
+
 def test_new_since_refresh_uses_first_seen() -> None:
     started = datetime(2026, 11, 11, 10, 0, tzinfo=UTC)
     new_job = _job(discovered_at=started)
     old_job = _job(discovered_at=started - timedelta(minutes=1))
-    assert is_within_window(
-        new_job,
-        RecencyWindow.new_since_refresh,
-        last_refresh_started_at=started,
-    )
-    assert not is_within_window(
-        old_job,
-        RecencyWindow.new_since_refresh,
-        last_refresh_started_at=started,
-    )
+    assert is_new_since_refresh(new_job, last_refresh_started_at=started)
+    assert not is_new_since_refresh(old_job, last_refresh_started_at=started)
 
 
 def test_skewed_first_seen_marked_unknown_not_rewritten() -> None:
@@ -89,22 +119,25 @@ def test_skewed_first_seen_marked_unknown_not_rewritten() -> None:
     assert job.intake_metadata["first_seen_unknown"] is True
     assert job.intake_metadata["first_seen_approx"] is True
     _ts, label = recency_timestamp(job)
-    assert label == "First seen (unknown)"
+    assert label == "First seen"
     assert not is_within_window(job, RecencyWindow.hours_24, now=scraped)
-    assert not is_within_window(
-        job,
-        RecencyWindow.new_since_refresh,
-        last_refresh_started_at=scraped - timedelta(hours=1),
+    assert not is_within_window(job, RecencyWindow.hours_48, now=scraped)
+    assert not is_new_since_refresh(
+        job, last_refresh_started_at=scraped - timedelta(hours=1)
     )
 
 
-def test_approx_first_seen_excluded_from_24h_even_if_timestamp_recent() -> None:
+def test_approx_first_seen_excluded_from_time_presets() -> None:
     now = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
     job = _job(
         discovered_at=now - timedelta(hours=1),
         intake_metadata={"first_seen_approx": True},
     )
     assert not is_within_window(job, RecencyWindow.hours_24, now=now)
+    assert not is_within_window(job, RecencyWindow.hours_48, now=now)
+    assert not is_within_window(job, RecencyWindow.days_7, now=now)
+    assert not is_within_window(job, RecencyWindow.days_30, now=now)
+    assert is_within_window(job, RecencyWindow.all, now=now)
     # Reliable posted_at still counts.
     job_posted = _job(
         posted_at=now - timedelta(hours=1),
@@ -112,6 +145,28 @@ def test_approx_first_seen_excluded_from_24h_even_if_timestamp_recent() -> None:
         intake_metadata={"first_seen_approx": True},
     )
     assert is_within_window(job_posted, RecencyWindow.hours_24, now=now)
+
+
+def test_unknown_or_approx_count_visible() -> None:
+    now = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
+    jobs = [
+        _job(posted_at=now - timedelta(hours=1)),
+        _job(
+            discovered_at=now - timedelta(hours=1),
+            intake_metadata={"first_seen_unknown": True},
+        ),
+        _job(
+            discovered_at=now - timedelta(days=2),
+            intake_metadata={"first_seen_approx": True},
+        ),
+    ]
+    counts = recency_counts(jobs, now=now)
+    assert counts["24h"] == 1
+    assert counts["48h"] == 1
+    assert counts["7d"] == 1
+    assert counts["30d"] == 1
+    assert counts["all"] == 3
+    assert counts["unknown_or_approx"] == 2
 
 
 def test_measure_skew_report() -> None:

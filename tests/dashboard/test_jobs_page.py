@@ -38,6 +38,10 @@ def _seed(*, title: str, apply_url: str | None) -> None:
         session.add(company)
         session.flush()
         now = datetime.now(UTC)
+        desc = (
+            f"Description for {title}. Build reliable software systems with "
+            "Python, distributed services, and thoughtful product delivery."
+        )
         session.add(
             JobPosting(
                 id=make_uuid(),
@@ -47,8 +51,8 @@ def _seed(*, title: str, apply_url: str | None) -> None:
                 title=title,
                 company_id=company.id,
                 location="Remote",
-                description_text="desc",
-                description_hash=make_description_hash("desc"),
+                description_text=desc,
+                description_hash=make_description_hash(desc),
                 dedupe_key=make_dedupe_key("PageCo", title, "Remote"),
                 company_apply_url=apply_url,
                 status="new",
@@ -70,8 +74,13 @@ def test_page_renders_controls(client: TestClient) -> None:
     assert 'id="q"' in html
     assert 'id="source"' in html
     assert 'id="location"' in html
-    assert 'id="date_from"' in html
-    assert 'id="date_to"' in html
+    assert 'id="recency"' in html
+    assert 'value="24h"' in html
+    assert 'value="48h"' in html
+    assert 'value="7d"' in html
+    assert 'value="30d"' in html
+    assert 'id="date_from"' not in html
+    assert 'id="date_to"' not in html
     assert 'id="sort"' in html
     assert 'id="clear-filters"' in html
     assert "/static/dashboard.css" in html
@@ -86,7 +95,7 @@ def test_page_js_marks_unavailable_and_safe_links(client: TestClient) -> None:
     assert "noopener noreferrer" in text
     assert "Unavailable" in text
     assert 'target="_blank"' in text or "target='_blank'" in text
-    assert "Open posting" in text
+    assert "Open original posting" in text
 
 
 def test_api_empty_state_for_page_data(client: TestClient) -> None:
@@ -97,6 +106,6 @@ def test_api_empty_state_for_page_data(client: TestClient) -> None:
 
 def test_api_with_url_for_page_consumption(client: TestClient) -> None:
     _seed(title="Linked Role", apply_url="https://jobs.example.com/open")
-    data = client.get("/api/jobs").json()
+    data = client.get("/api/jobs?fit=all").json()
     assert data["items"][0]["job_url"] == "https://jobs.example.com/open"
     assert data["items"][0]["source_label"] == "linkedin_import"

@@ -52,16 +52,8 @@
     const refreshProgress = document.getElementById("refresh-progress");
     const PREF_KEY = "ganesha.dashboard.filters";
 
-    const fields = [
-      "fit",
-      "recency",
-      "q",
-      "source",
-      "location",
-      "date_from",
-      "date_to",
-      "sort",
-    ];
+    const fields = ["fit", "recency", "q", "source", "location", "sort"];
+    const RECENCY_PRESETS = new Set(["24h", "48h", "7d", "30d", "all"]);
     let debounceTimer = null;
     let refreshPollTimer = null;
     let currentPage = 1;
@@ -118,7 +110,8 @@
           continue;
         }
         if (name === "recency") {
-          el.value = params.get("recency") || "all";
+          const raw = params.get("recency") || "all";
+          el.value = RECENCY_PRESETS.has(raw) ? raw : "all";
           continue;
         }
         if (name === "sort") {
@@ -178,9 +171,10 @@
     function renderRecencyCounts(counts) {
       if (!recencyCounts || !counts) return;
       recencyCounts.textContent =
-        `Recency · 24h ${counts.hours_24 || 0} · 3d ${counts.days_3 || 0} · ` +
-        `7d ${counts.days_7 || 0} · All ${counts.all || 0} · ` +
-        `New since refresh ${counts.new_since_refresh || 0}`;
+        `Recency · 24h ${counts.hours_24 || 0} · 48h ${counts.hours_48 || 0} · ` +
+        `7d ${counts.days_7 || 0} · 30d ${counts.days_30 || 0} · ` +
+        `All ${counts.all || 0} · ` +
+        `Unknown/approx date excluded from time presets ${counts.unknown_or_approx || 0}`;
     }
 
     function renderRows(items) {
@@ -432,7 +426,7 @@
         });
       }
     }
-    for (const name of ["q", "location", "date_from", "date_to"]) {
+    for (const name of ["q", "location"]) {
       const el = form.elements.namedItem(name);
       if (!el) continue;
       el.addEventListener("input", () => {
