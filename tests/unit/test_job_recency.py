@@ -10,6 +10,7 @@ from packages.core.services.job_recency import (
     is_within_window,
     measure_first_seen_skew,
     recency_counts,
+    recency_counts_split,
     recency_timestamp,
 )
 
@@ -167,6 +168,28 @@ def test_unknown_or_approx_count_visible() -> None:
     assert counts["30d"] == 1
     assert counts["all"] == 3
     assert counts["unknown_or_approx"] == 2
+
+
+def test_recency_counts_split_posted_vs_first_seen() -> None:
+    now = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
+    jobs = [
+        _job(posted_at=now - timedelta(hours=1)),
+        _job(posted_at=now - timedelta(days=10)),
+        _job(discovered_at=now - timedelta(hours=2)),
+        _job(
+            discovered_at=now - timedelta(hours=1),
+            intake_metadata={"first_seen_approx": True},
+        ),
+    ]
+    split = recency_counts_split(jobs, now=now)
+    assert split["posted"]["24h"] == 1
+    assert split["posted"]["30d"] == 2
+    assert split["posted"]["all"] == 2
+    assert split["first_seen"]["24h"] == 1  # approx excluded from presets
+    assert split["first_seen"]["all"] == 2
+    assert split["first_seen"]["unknown_or_approx"] == 1
+    assert split["combined"]["all"] == 4
+    assert split["combined"]["24h"] == 2
 
 
 def test_measure_skew_report() -> None:
