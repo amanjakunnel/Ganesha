@@ -132,3 +132,72 @@ def test_ambiguous_phd_needs_review() -> None:
     )
     assert result.result == ELIGIBILITY_NEEDS_REVIEW
     assert result.reason_category == "phd_requirement_unclear"
+
+
+def test_phd_title_new_college_grad_excluded() -> None:
+    result = classify_job_eligibility(
+        title="Research Scientist, ML Systems - PhD New College Grad 2026",
+        description=_long("Join our research org building ML systems infrastructure."),
+        company_apply_url="https://example.com/apply",
+        location="Santa Clara, CA",
+        description_verified=True,
+    )
+    assert result.result == ELIGIBILITY_EXCLUDED
+    assert result.reason_category == "phd_required"
+
+
+def test_phd_students_title_excluded() -> None:
+    result = classify_job_eligibility(
+        title="Research Intern for PhD Students",
+        description=_long("Lab collaboration on systems research projects."),
+        company_apply_url="https://example.com/apply",
+        location="Cambridge, MA",
+        description_verified=True,
+    )
+    # Internship wins first when both apply.
+    assert result.result == ELIGIBILITY_EXCLUDED
+    assert result.reason_category in {"internship_role", "phd_required"}
+
+
+def test_currently_pursuing_phd_excluded() -> None:
+    result = classify_job_eligibility(
+        title="Research Scientist",
+        description=_long(
+            "Candidates must be currently pursuing a PhD in computer science."
+        ),
+        company_apply_url="https://example.com/apply",
+        location="Seattle, WA",
+        description_verified=True,
+    )
+    assert result.result == ELIGIBILITY_EXCLUDED
+    assert result.reason_category == "phd_required"
+
+
+def test_aggregator_stub_internship_role_line_excluded() -> None:
+    stub = (
+        "Company: Acme\n"
+        "Role: Software Engineering Intern - Summer 2026\n"
+        "Location: New York, NY\n"
+        "Category: Software Engineering\n"
+        "Source: https://github.com/SimplifyJobs/New-Grad-Positions"
+    )
+    result = classify_job_eligibility(
+        title="Software Engineering Intern - Summer 2026",
+        description=stub,
+        company_apply_url="https://example.com/apply",
+        location="New York, NY",
+        employment_type="full_time",
+    )
+    assert result.result == ELIGIBILITY_EXCLUDED
+    assert result.reason_category == "internship_role"
+
+
+def test_coop_title_excluded() -> None:
+    result = classify_job_eligibility(
+        title="Software Engineer Co-op",
+        description=_long("Rotational co-op program with mentoring."),
+        company_apply_url="https://example.com/apply",
+        location="Toronto, ON, Canada",
+    )
+    assert result.result == ELIGIBILITY_EXCLUDED
+    assert result.reason_category == "internship_role"
