@@ -590,6 +590,10 @@ def gmail_preview_cmd(
             )
         elif persist:
             typer.echo("Gmail persist skipped: matches=0")
+    finally:
+        session.close()
+
+
 @jobs_app.command(name="backfill-board-dates")
 def backfill_board_dates_cmd(
     dry_run: bool = typer.Option(
@@ -716,6 +720,11 @@ def assess_fit_batch_cmd(
         "--role-filtered-only/--include-mismatches",
         help="Skip role_family_mismatch jobs (default)",
     ),
+    eligible_only: bool = typer.Option(
+        True,
+        "--eligible-only/--include-excluded",
+        help="Skip eligibility-excluded jobs (default)",
+    ),
 ) -> None:
     """Layer-2: bounded evidence-fit scoring for newly unscored jobs."""
     from packages.core.services.role_profile import assess_fit_batch
@@ -724,17 +733,84 @@ def assess_fit_batch_cmd(
     try:
         typer.echo(f"Assessing up to {limit} unscored jobs…")
         result = assess_fit_batch(
-            session, limit=limit, role_filtered_only=role_filtered_only
+            session,
+            limit=limit,
+            role_filtered_only=role_filtered_only,
+            eligible_only=eligible_only,
         )
         session.commit()
         typer.echo(
             "Fit batch: "
             f"assessed={result['assessed']} "
             f"skipped_scored={result['skipped_scored']} "
-            f"skipped_mismatch={result['skipped_mismatch']}"
+            f"skipped_mismatch={result['skipped_mismatch']} "
+            f"skipped_excluded={result.get('skipped_excluded', 0)}"
         )
         for band, count in (result.get("bands") or {}).items():
             typer.echo(f"  {band}: {count}")
+    finally:
+        session.close()
+
+
+@jobs_app.command(name="assess-fit-drain")
+def assess_fit_drain_cmd(
+    batch_size: int = typer.Option(
+        200, "--batch-size", help="Jobs to assess per batch loop"
+    ),
+    role_filtered_only: bool = typer.Option(
+        True,
+        "--role-filtered-only/--include-mismatches",
+        help="Skip role_family_mismatch jobs (default)",
+    ),
+    eligible_only: bool = typer.Option(
+        True,
+        "--eligible-only/--include-excluded",
+        help="Skip eligibility-excluded jobs (default)",
+    ),
+    max_batches: Optional[int] = typer.Option(
+        None,
+        "--max-batches",
+        help="Optional safety cap on batch loops (default: until exhausted)",
+    ),
+) -> None:
+    """Layer-2: drain remaining role-matched eligible unscored jobs in loops."""
+    from packages.core.services.role_profile import assess_fit_drain, feed_counts_snapshot
+
+    session: Session = SessionLocal()
+    try:
+        typer.echo(
+            f"Draining fit scoring (batch_size={batch_size}"
+            + (f", max_batches={max_batches}" if max_batches else "")
+            + ")…"
+        )
+        result = assess_fit_drain(
+            session,
+            batch_size=batch_size,
+            role_filtered_only=role_filtered_only,
+            eligible_only=eligible_only,
+            max_batches=max_batches,
+        )
+        session.commit()
+        typer.echo(
+            "Fit drain: "
+            f"assessed={result['assessed']} batches={result['batches']} "
+            f"exhausted={result['exhausted']} "
+            f"skipped_scored={result['skipped_scored']} "
+            f"skipped_mismatch={result['skipped_mismatch']} "
+            f"skipped_excluded={result['skipped_excluded']}"
+        )
+        for band, count in (result.get("bands") or {}).items():
+            typer.echo(f"  batch band {band}: {count}")
+        snap = feed_counts_snapshot(session)
+        counts = snap["counts"]
+        typer.echo(
+            "Final counts: "
+            f"recommended_actionable={counts['recommended_actionable']} "
+            f"stretch_actionable={counts['stretch_actionable']} "
+            f"other_roles={counts['other_roles']} "
+            f"unscored_fit={counts['unscored_fit']} "
+            f"total={counts['total']}"
+        )
     finally:
         session.close()
 

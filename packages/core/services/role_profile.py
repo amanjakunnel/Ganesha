@@ -763,11 +763,22 @@ def assess_fit_batch(
     *,
     limit: int = 50,
     role_filtered_only: bool = True,
+    eligible_only: bool = True,
+    progress_cb: Any | None = None,
 ) -> dict[str, Any]:
-    """Layer-2: score newly unscored jobs that pass Layer-1 (deterministic)."""
+    """Layer-2: score newly unscored jobs that pass Layer-1 (deterministic).
+
+    Scans newest-first in windows until ``limit`` assessments or the feed is
+    exhausted. Skips already-scored rows; optionally skips role mismatches and
+    eligibility-excluded postings.
+    """
     from packages.core.services.evidence_fit_service import (
         assess_and_store,
         get_stored_fit,
+    )
+    from packages.core.services.job_eligibility import (
+        ELIGIBILITY_EXCLUDED,
+        resolve_job_eligibility,
     )
 
     profile = load_role_profile(session)
@@ -776,49 +787,134 @@ def assess_fit_batch(
     facts = usable_facts(session)
     blob = _evidence_blob(facts)
 
-    jobs = (
-        session.query(JobPosting)
-        .order_by(JobPosting.created_at.desc())
-        .limit(max(limit * 8, 200))
-        .all()
-    )
     assessed = 0
     skipped_mismatch = 0
     skipped_scored = 0
+    skipped_excluded = 0
     bands: dict[str, int] = {}
+    window = max(limit * 8, 200)
+    offset = 0
 
-    for job in jobs:
-        if assessed >= limit:
-            break
-        if get_stored_fit(job):
-            skipped_scored += 1
-            continue
-        block = get_stored_role_block(job)
-        if not block or block.get("status") not in {STATUS_MATCHED, STATUS_MISMATCH}:
-            result = classify_job_against_profile(job, profile, candidate_blob=blob)
-            store_role_classification(job, result)
-            session.add(job)
-            block = result
-        if block.get("status") == STATUS_MISMATCH:
-            skipped_mismatch += 1
-            if role_filtered_only:
-                continue
-        assessment = assess_and_store(session, job)
-        bands[assessment.band] = bands.get(assessment.band, 0) + 1
-        assessed += 1
-        print(
-            f"  [{assessed}/{limit}] {job.title[:60]} → "
-            f"{assessment.band} ({assessment.score})",
-            flush=True,
+    while assessed < limit:
+        jobs = (
+            session.query(JobPosting)
+            .order_by(JobPosting.created_at.desc())
+            .offset(offset)
+            .limit(window)
+            .all()
         )
+        if not jobs:
+            break
+        offset += len(jobs)
+
+        for job in jobs:
+            if assessed >= limit:
+                break
+            if get_stored_fit(job):
+                skipped_scored += 1
+                continue
+            if eligible_only:
+                elig = resolve_job_eligibility(job)
+                if elig.result == ELIGIBILITY_EXCLUDED:
+                    skipped_excluded += 1
+                    continue
+            block = get_stored_role_block(job)
+            if not block or block.get("status") not in {
+                STATUS_MATCHED,
+                STATUS_MISMATCH,
+            }:
+                result = classify_job_against_profile(
+                    job, profile, candidate_blob=blob
+                )
+                store_role_classification(job, result)
+                session.add(job)
+                block = result
+            if block.get("status") == STATUS_MISMATCH:
+                skipped_mismatch += 1
+                if role_filtered_only:
+                    continue
+            assessment = assess_and_store(session, job)
+            bands[assessment.band] = bands.get(assessment.band, 0) + 1
+            assessed += 1
+            msg = (
+                f"  [{assessed}/{limit}] {(job.title or '')[:60]} → "
+                f"{assessment.band} ({assessment.score})"
+            )
+            print(msg, flush=True)
+            if progress_cb is not None:
+                progress_cb(assessed, limit, job, assessment)
+
+        if len(jobs) < window:
+            break
 
     session.flush()
     return {
         "assessed": assessed,
         "skipped_scored": skipped_scored,
         "skipped_mismatch": skipped_mismatch,
+        "skipped_excluded": skipped_excluded,
         "role_filtered_only": role_filtered_only,
+        "eligible_only": eligible_only,
         "bands": bands,
+    }
+
+
+def assess_fit_drain(
+    session: Session,
+    *,
+    batch_size: int = 200,
+    role_filtered_only: bool = True,
+    eligible_only: bool = True,
+    max_batches: int | None = None,
+) -> dict[str, Any]:
+    """Keep running assess_fit_batch until no eligible unscored jobs remain."""
+    total_assessed = 0
+    bands: dict[str, int] = {}
+    batches = 0
+    skipped_scored = 0
+    skipped_mismatch = 0
+    skipped_excluded = 0
+
+    exhausted = False
+    while True:
+        if max_batches is not None and batches >= max_batches:
+            break
+        batches += 1
+        print(
+            f"Drain batch {batches} (up to {batch_size})…",
+            flush=True,
+        )
+        result = assess_fit_batch(
+            session,
+            limit=batch_size,
+            role_filtered_only=role_filtered_only,
+            eligible_only=eligible_only,
+        )
+        n = int(result.get("assessed") or 0)
+        total_assessed += n
+        skipped_scored += int(result.get("skipped_scored") or 0)
+        skipped_mismatch += int(result.get("skipped_mismatch") or 0)
+        skipped_excluded += int(result.get("skipped_excluded") or 0)
+        for band, count in (result.get("bands") or {}).items():
+            bands[band] = bands.get(band, 0) + int(count)
+        print(
+            f"  batch assessed={n} cumulative={total_assessed}",
+            flush=True,
+        )
+        if n == 0:
+            exhausted = True
+            break
+
+    return {
+        "assessed": total_assessed,
+        "batches": batches,
+        "skipped_scored": skipped_scored,
+        "skipped_mismatch": skipped_mismatch,
+        "skipped_excluded": skipped_excluded,
+        "role_filtered_only": role_filtered_only,
+        "eligible_only": eligible_only,
+        "bands": bands,
+        "exhausted": exhausted,
     }
 
 

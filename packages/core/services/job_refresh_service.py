@@ -66,6 +66,8 @@ class RefreshJobState:
     progress: str = ""
     sources: list[SourceRefreshResult] = field(default_factory=list)
     fit_assessed: int = 0
+    scoring_done: int = 0
+    scoring_total: int = 0
     message: str | None = None
     overall_last_refreshed: str | None = None
 
@@ -78,6 +80,8 @@ class RefreshJobState:
             "progress": self.progress,
             "sources": [asdict(s) for s in self.sources],
             "fit_assessed": self.fit_assessed,
+            "scoring_done": self.scoring_done,
+            "scoring_total": self.scoring_total,
             "message": self.message,
             "overall_last_refreshed": self.overall_last_refreshed,
         }
@@ -271,14 +275,22 @@ def _run_refresh(refresh_id: str) -> None:
                     raise TimeoutError(
                         "Refresh exceeded timeout during company board sync"
                     )
+                platform = str(info.get("platform") or "board").capitalize()
+                index = info.get("index")
+                total = info.get("total")
                 company = info.get("company") or "?"
-                platform = info.get("platform") or "?"
                 status = info.get("status") or "…"
-                fetched = int(info.get("fetched") or 0)
-                _set_progress(
-                    state,
-                    f"Board {platform}/{company}: {status} ({fetched} jobs)…",
-                )
+                if isinstance(index, int) and isinstance(total, int) and total > 0:
+                    _set_progress(
+                        state,
+                        f"{platform} boards {index}/{total}…",
+                    )
+                else:
+                    fetched = int(info.get("fetched") or 0)
+                    _set_progress(
+                        state,
+                        f"Board {platform}/{company}: {status} ({fetched} jobs)…",
+                    )
 
             board_timeout = float(
                 getattr(settings, "company_board_fetch_timeout_seconds", 90) or 90
@@ -326,10 +338,24 @@ def _run_refresh(refresh_id: str) -> None:
 
         fit_n = 0
         if created_ids:
-            _set_progress(state, f"Assessing fit for {len(created_ids)} new job(s)…")
-            fit_n = _assess_new_jobs(session, created_ids)
+            # Deduplicate while preserving order — only score jobs created this run.
+            unique_ids = list(dict.fromkeys(created_ids))
+
+            def _on_score_progress(done: int, total: int) -> None:
+                with _STATE_LOCK:
+                    state.scoring_done = done
+                    state.scoring_total = total
+                _set_progress(state, f"Scoring jobs {done}/{total}…")
+
+            fit_n = _assess_new_jobs(
+                session, unique_ids, progress_cb=_on_score_progress
+            )
             session.commit()
         state.fit_assessed = fit_n
+        with _STATE_LOCK:
+            state.scoring_done = fit_n
+            if created_ids and state.scoring_total == 0:
+                state.scoring_total = fit_n
 
         failed = sj.status == "failed" or cb.status == "failed"
         state.status = "failed" if failed else "completed"
@@ -474,22 +500,50 @@ def _backfill_first_seen(session: Session) -> int:
     return n
 
 
-def _assess_new_jobs(session: Session, job_ids: list[str]) -> int:
-    from packages.core.services.evidence_fit_service import assess_and_store
+def _assess_new_jobs(
+    session: Session,
+    job_ids: list[str],
+    *,
+    progress_cb: Any | None = None,
+) -> int:
+    """Score newly created jobs only (skip excluded). Reports N/M via progress_cb."""
+    from packages.core.services.evidence_fit_service import (
+        assess_and_store,
+        get_stored_fit,
+    )
+    from packages.core.services.job_eligibility import resolve_job_eligibility
 
-    n = 0
+    # Bound auto-score to this refresh's created set; filter excluded up front
+    # so progress totals match work remaining.
+    eligible_jobs: list[JobPosting] = []
     for jid in job_ids:
         job = session.query(JobPosting).filter(JobPosting.id == jid).one_or_none()
         if job is None:
             continue
-        eligibility = (job.intake_metadata or {}).get("eligibility") or {}
-        if eligibility.get("result") == ELIGIBILITY_EXCLUDED:
+        try:
+            if resolve_job_eligibility(job).result == ELIGIBILITY_EXCLUDED:
+                continue
+        except Exception:
+            eligibility = (job.intake_metadata or {}).get("eligibility") or {}
+            if eligibility.get("result") == ELIGIBILITY_EXCLUDED:
+                continue
+        if get_stored_fit(job):
             continue
+        eligible_jobs.append(job)
+
+    total = len(eligible_jobs)
+    if progress_cb is not None and total:
+        progress_cb(0, total)
+
+    n = 0
+    for job in eligible_jobs:
         try:
             assess_and_store(session, job)
             n += 1
         except Exception:
             continue
+        if progress_cb is not None:
+            progress_cb(n, total)
     return n
 
 

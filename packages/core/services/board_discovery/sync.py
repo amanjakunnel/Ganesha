@@ -160,6 +160,8 @@ def _emit_board_progress(
     status: str,
     fetched: int = 0,
     error: str | None = None,
+    index: int | None = None,
+    total: int | None = None,
 ) -> None:
     if on_board_progress is None:
         return
@@ -172,6 +174,10 @@ def _emit_board_progress(
     }
     if error:
         payload["error"] = error
+    if index is not None:
+        payload["index"] = index
+    if total is not None:
+        payload["total"] = total
     on_board_progress(payload)
 
 
@@ -346,8 +352,9 @@ def sync_company_boards(
     if client is None:
         client = BoardHttpClient()
 
+    board_total = len(board_list)
     try:
-        for board in board_list:
+        for board_index, board in enumerate(board_list, start=1):
             result.boards_attempted += 1
             fetcher = _FETCHERS.get(board.platform)
             if fetcher is None:
@@ -358,6 +365,8 @@ def sync_company_boards(
                 on_board_progress,
                 board=board,
                 status="fetching",
+                index=board_index,
+                total=board_total,
             )
             fetch = _fetch_board_with_timeout(
                 fetcher,
@@ -377,6 +386,8 @@ def sync_company_boards(
                     board=board,
                     status="error",
                     error=err,
+                    index=board_index,
+                    total=board_total,
                 )
                 result.unresolved.append(
                     UnresolvedCompany(
@@ -398,6 +409,8 @@ def sync_company_boards(
                     on_board_progress,
                     board=board,
                     status="not_modified",
+                    index=board_index,
+                    total=board_total,
                 )
                 continue
 
@@ -410,6 +423,8 @@ def sync_company_boards(
                 board=board,
                 status="ok",
                 fetched=len(fetch.jobs),
+                index=board_index,
+                total=board_total,
             )
 
             seen_keys: set[str] = set()
@@ -534,8 +549,9 @@ def backfill_board_dates(
     if client is None:
         client = BoardHttpClient()
 
+    board_total = len(resolution.boards)
     try:
-        for board in resolution.boards:
+        for board_index, board in enumerate(resolution.boards, start=1):
             result.boards_attempted += 1
             fetcher = _FETCHERS.get(board.platform)
             if fetcher is None:
@@ -543,7 +559,11 @@ def backfill_board_dates(
                 continue
 
             _emit_board_progress(
-                on_board_progress, board=board, status="fetching"
+                on_board_progress,
+                board=board,
+                status="fetching",
+                index=board_index,
+                total=board_total,
             )
             fetch = _fetch_board_with_timeout(
                 fetcher,
@@ -560,6 +580,8 @@ def backfill_board_dates(
                     board=board,
                     status="error",
                     error=err,
+                    index=board_index,
+                    total=board_total,
                 )
                 continue
 
@@ -573,6 +595,8 @@ def backfill_board_dates(
                 board=board,
                 status="ok",
                 fetched=len(fetch.jobs),
+                index=board_index,
+                total=board_total,
             )
 
             for job in fetch.jobs:
