@@ -199,6 +199,24 @@ def recency_counts(
     return counts
 
 
+def recency_counts_split(
+    jobs: list[JobPosting],
+    *,
+    now: datetime | None = None,
+    last_refresh_started_at: datetime | None = None,
+) -> dict[str, dict[str, int]]:
+    """Preset counts split by clock source: posted_at vs first_seen fallback."""
+    del last_refresh_started_at  # retained for call-site compatibility
+    now = now or datetime.now(UTC)
+    posted = [j for j in jobs if j.posted_at is not None]
+    first_seen = [j for j in jobs if j.posted_at is None]
+    return {
+        "posted": recency_counts(posted, now=now),
+        "first_seen": recency_counts(first_seen, now=now),
+        "combined": recency_counts(jobs, now=now),
+    }
+
+
 def job_recency_payload(job: JobPosting) -> dict[str, Any]:
     ts, label = recency_timestamp(job)
     meta = job.intake_metadata or {}

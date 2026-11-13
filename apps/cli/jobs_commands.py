@@ -590,6 +590,48 @@ def gmail_preview_cmd(
             )
         elif persist:
             typer.echo("Gmail persist skipped: matches=0")
+@jobs_app.command(name="backfill-board-dates")
+def backfill_board_dates_cmd(
+    dry_run: bool = typer.Option(
+        True,
+        "--dry-run/--apply",
+        help="Preview by default; pass --apply to write posted_at",
+    ),
+    limit: int | None = typer.Option(
+        None,
+        "--limit",
+        help="Max referral companies / boards to re-fetch (default: settings / 25)",
+    ),
+) -> None:
+    """Re-fetch board APIs and backfill JobPosting.posted_at from vendor dates only."""
+    from packages.core.services.board_discovery import backfill_board_dates
+    from packages.core.settings import settings
+
+    effective_limit = (
+        limit
+        if limit is not None
+        else int(settings.company_board_discovery_max_companies)
+    )
+    session: Session = SessionLocal()
+    try:
+        result = backfill_board_dates(
+            session, dry_run=dry_run, limit=effective_limit
+        )
+        if not dry_run:
+            session.commit()
+        typer.echo(
+            "Board dates backfill: "
+            f"dry_run={result.dry_run} companies_checked={result.companies_checked} "
+            f"boards_ok={result.boards_ok}/{result.boards_attempted} "
+            f"jobs_seen={result.jobs_seen} posted_at_set={result.posted_at_set} "
+            f"already_had={result.already_had_posted_at} "
+            f"no_source_date={result.no_source_date} "
+            f"missing_local={result.missing_local} errors={len(result.errors)}"
+        )
+        for note in (result.notes or [])[:10]:
+            typer.echo(f"  note: {note}")
+        for err in result.errors[:10]:
+            typer.echo(f"  error: {err}")
     finally:
         session.close()
 
@@ -620,6 +662,113 @@ def reassess_fit_cmd(
         counts = result.get("counts") or {}
         for band, count in counts.items():
             typer.echo(f"  {band}: {count}")
+    finally:
+        session.close()
+
+
+@jobs_app.command(name="classify-role-families")
+def classify_role_families_cmd(
+    apply: bool = typer.Option(
+        False, "--apply", help="Write intake_metadata.role_profile (default dry-run)"
+    ),
+    limit: int = typer.Option(100, "--limit", help="Max jobs to classify"),
+    refresh_profile: bool = typer.Option(
+        False, "--refresh-profile", help="Re-derive role profile from evidence"
+    ),
+) -> None:
+    """Layer-1: classify jobs against the derived role profile (cheap pre-filter)."""
+    from packages.core.services.role_profile import (
+        classify_jobs_batch,
+        load_role_profile,
+    )
+
+    session: Session = SessionLocal()
+    try:
+        profile = load_role_profile(session, refresh=refresh_profile)
+        typer.echo(
+            "Role profile: "
+            f"families={[f.id for f in profile.enabled_families()]} "
+            f"hash={profile.evidence_hash}"
+        )
+        result = classify_jobs_batch(
+            session, limit=limit, apply=apply, only_missing=True
+        )
+        if apply:
+            session.commit()
+        typer.echo(
+            "Role-family classify: "
+            f"scanned={result['scanned']} applied={result['applied']} "
+            f"dry_run={result['dry_run']}"
+        )
+        for status, count in (result.get("counts") or {}).items():
+            typer.echo(f"  {status}: {count}")
+            for title in (result.get("examples") or {}).get(status, []):
+                typer.echo(f"    · {title}")
+    finally:
+        session.close()
+
+
+@jobs_app.command(name="assess-fit-batch")
+def assess_fit_batch_cmd(
+    limit: int = typer.Option(50, "--limit", help="Max unscored jobs to assess"),
+    role_filtered_only: bool = typer.Option(
+        True,
+        "--role-filtered-only/--include-mismatches",
+        help="Skip role_family_mismatch jobs (default)",
+    ),
+) -> None:
+    """Layer-2: bounded evidence-fit scoring for newly unscored jobs."""
+    from packages.core.services.role_profile import assess_fit_batch
+
+    session: Session = SessionLocal()
+    try:
+        typer.echo(f"Assessing up to {limit} unscored jobs…")
+        result = assess_fit_batch(
+            session, limit=limit, role_filtered_only=role_filtered_only
+        )
+        session.commit()
+        typer.echo(
+            "Fit batch: "
+            f"assessed={result['assessed']} "
+            f"skipped_scored={result['skipped_scored']} "
+            f"skipped_mismatch={result['skipped_mismatch']}"
+        )
+        for band, count in (result.get("bands") or {}).items():
+            typer.echo(f"  {band}: {count}")
+    finally:
+        session.close()
+
+
+@jobs_app.command(name="role-fit-report")
+def role_fit_report_cmd() -> None:
+    """Print Recommended / Stretch / Other roles counts and sample titles."""
+    from packages.core.services.role_profile import feed_counts_snapshot, load_role_profile
+
+    session: Session = SessionLocal()
+    try:
+        profile = load_role_profile(session)
+        typer.echo(
+            "Derived families: "
+            + ", ".join(
+                f"{f.label} ({f.id}{'' if f.enabled else ', disabled'})"
+                for f in profile.families
+            )
+            or "(none)"
+        )
+        snap = feed_counts_snapshot(session)
+        counts = snap["counts"]
+        typer.echo(
+            "Counts: "
+            f"recommended_actionable={counts['recommended_actionable']} "
+            f"stretch_actionable={counts['stretch_actionable']} "
+            f"other_roles={counts['other_roles']} "
+            f"unscored_fit={counts['unscored_fit']} "
+            f"total={counts['total']}"
+        )
+        for key, titles in (snap.get("examples") or {}).items():
+            typer.echo(f"Examples · {key}:")
+            for title in titles:
+                typer.echo(f"  · {title}")
     finally:
         session.close()
 

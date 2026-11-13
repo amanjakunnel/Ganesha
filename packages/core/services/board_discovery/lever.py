@@ -8,6 +8,7 @@ Docs: https://github.com/lever/postings-api
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -130,10 +131,28 @@ def parse_jobs(
                 company_apply_url=apply_url,
                 workplace_type=raw.get("workplaceType"),
                 employment_type=commitment,
+                posted_at=_posted_at_from_raw(raw),
                 raw_payload={"id": job_id},
             )
         )
     return out
+
+
+def _posted_at_from_raw(raw: dict[str, Any]) -> str | None:
+    """Lever ``createdAt`` is milliseconds since Unix epoch."""
+    created = raw.get("createdAt")
+    if created is None:
+        return None
+    if isinstance(created, (int, float)):
+        ms = float(created)
+        # Defensive: accept seconds if a short epoch sneaks in.
+        seconds = ms / 1000.0 if ms >= 1e11 else ms
+        try:
+            return datetime.fromtimestamp(seconds, tz=UTC).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return None
+    text = str(created).strip()
+    return text or None
 
 
 def fetch_board(
