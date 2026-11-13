@@ -112,7 +112,8 @@ def test_sales_title_is_role_family_mismatch() -> None:
     )
     result = classify_job_against_profile(job, profile)
     assert result["status"] == STATUS_MISMATCH
-    assert "sales" in (result.get("reason") or "").lower()
+    reason = (result.get("reason") or "").lower()
+    assert "sales" in reason or "non-software" in reason
 
 
 def test_unfamiliar_title_with_matching_description_passes() -> None:
@@ -191,6 +192,119 @@ def test_override_persistence(tmp_path: Path) -> None:
 
     again = merge_profile(derived, overrides)
     assert {f.id for f in again.families} == {"backend", "ml_systems", "data_eng"}
+
+
+def test_layer1_true_positives_software_titles() -> None:
+    """Regression: real SWE / platform titles still match."""
+    profile = RoleProfile(
+        families=[
+            RoleFamily(
+                id="cloud_platform",
+                label="Cloud / Platform",
+                title_patterns=[
+                    r"\b(platform engineer|cloud engineer|infrastructure engineer)\b"
+                ],
+                responsibility_keywords=[
+                    "kubernetes",
+                    "aws",
+                    "terraform",
+                    "docker",
+                    "ci/cd",
+                ],
+                enabled=True,
+            ),
+            RoleFamily(
+                id="software_engineering",
+                label="SWE",
+                title_patterns=[r"\b(software engineer|swe\b|full[- ]?stack)\b"],
+                responsibility_keywords=["python", "java", "typescript"],
+                enabled=True,
+            ),
+            RoleFamily(
+                id="backend",
+                label="Backend",
+                title_patterns=[r"\b(backend|back[- ]end)\b"],
+                responsibility_keywords=["backend", "microservices", "postgresql"],
+                enabled=True,
+            ),
+        ]
+    )
+    cases = [
+        (
+            "Platform Engineer",
+            "Own Kubernetes on AWS with Terraform and Docker CI/CD pipelines.",
+            "cloud_platform",
+        ),
+        (
+            "Software Engineer, New Grad",
+            "Build product features in Python and TypeScript.",
+            "software_engineering",
+        ),
+        (
+            "Backend Engineer",
+            "Design microservices and PostgreSQL schemas for customer APIs.",
+            "backend",
+        ),
+        (
+            "Member of Technical Staff, Warp Core",
+            "Build Kubernetes infrastructure on AWS with Terraform and Docker. "
+            "Own platform reliability and CI/CD for internal developer services.",
+            "cloud_platform",
+        ),
+    ]
+    for title, desc, expected_family in cases:
+        result = classify_job_against_profile(_job(title, desc), profile)
+        assert result["status"] == STATUS_MATCHED, title
+        assert result["matched_family"] == expected_family, title
+
+
+def test_layer1_true_negatives_non_software() -> None:
+    """Regression: ops/legal/manufacturing titles must not pass on boilerplate."""
+    profile = RoleProfile(
+        families=[
+            RoleFamily(
+                id="cloud_platform",
+                label="Cloud / Platform",
+                title_patterns=[
+                    r"\b(platform engineer|cloud engineer|infrastructure engineer)\b"
+                ],
+                responsibility_keywords=[
+                    "kubernetes",
+                    "aws",
+                    "terraform",
+                    "infrastructure",
+                    "platform",
+                    "docker",
+                ],
+                enabled=True,
+            ),
+            RoleFamily(
+                id="software_engineering",
+                label="SWE",
+                title_patterns=[r"\b(software engineer|swe\b)\b"],
+                responsibility_keywords=["python", "java", "linux", "software engineer"],
+                enabled=True,
+            ),
+        ]
+    )
+    # Descriptions intentionally include SWE boilerplate that previously leaked matches.
+    boilerplate = (
+        "Our company uses AWS, Python, Java, and Linux. We talk about platform "
+        "and infrastructure in our engineering blog. Equal opportunity employer."
+    )
+    negatives = [
+        "Office & Events Manager",
+        "Labor & Employment Attorney",
+        "Accounts Payable Specialist",
+        "Lead Avionics Technician",
+        "Manufacturing Engineer, Energetics",
+        "Mechanical Engineer, Static Structures",
+        "Logistics Specialist",
+        "EHS Compliance Specialist",
+    ]
+    for title in negatives:
+        result = classify_job_against_profile(_job(title, boilerplate), profile)
+        assert result["status"] == STATUS_MISMATCH, title
 
 
 def test_other_roles_fit_filter() -> None:

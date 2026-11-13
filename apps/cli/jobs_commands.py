@@ -590,6 +590,10 @@ def gmail_preview_cmd(
             )
         elif persist:
             typer.echo("Gmail persist skipped: matches=0")
+    finally:
+        session.close()
+
+
 @jobs_app.command(name="backfill-board-dates")
 def backfill_board_dates_cmd(
     dry_run: bool = typer.Option(
@@ -675,6 +679,11 @@ def classify_role_families_cmd(
     refresh_profile: bool = typer.Option(
         False, "--refresh-profile", help="Re-derive role profile from evidence"
     ),
+    reclassify_all: bool = typer.Option(
+        False,
+        "--reclassify-all",
+        help="Re-run even when role_profile status already set",
+    ),
 ) -> None:
     """Layer-1: classify jobs against the derived role profile (cheap pre-filter)."""
     from packages.core.services.role_profile import (
@@ -691,7 +700,10 @@ def classify_role_families_cmd(
             f"hash={profile.evidence_hash}"
         )
         result = classify_jobs_batch(
-            session, limit=limit, apply=apply, only_missing=True
+            session,
+            limit=limit,
+            apply=apply,
+            only_missing=not reclassify_all,
         )
         if apply:
             session.commit()
@@ -769,6 +781,115 @@ def role_fit_report_cmd() -> None:
             typer.echo(f"Examples · {key}:")
             for title in titles:
                 typer.echo(f"  · {title}")
+    finally:
+        session.close()
+
+
+@jobs_app.command(name="audit-role-feed")
+def audit_role_feed_cmd(
+    per_bucket: int = typer.Option(20, "--per-bucket", help="Samples per bucket"),
+    reclassify: bool = typer.Option(
+        False,
+        "--reclassify",
+        help="Recompute Layer-1 in-memory (does not persist)",
+    ),
+) -> None:
+    """Print 20 jobs each from role-matched / Recommended / Stretch for QA."""
+    from packages.core.services.role_profile import audit_role_feed_samples
+
+    session: Session = SessionLocal()
+    try:
+        snap = audit_role_feed_samples(
+            session, per_bucket=per_bucket, reclassify=reclassify
+        )
+        typer.echo(
+            f"Role-feed audit (per_bucket={snap['per_bucket']} "
+            f"reclassify={snap['reclassify']} families={snap['family_ids']})"
+        )
+        for bucket, rows in (snap.get("buckets") or {}).items():
+            typer.echo(f"\n=== {bucket} ({len(rows)}) ===")
+            for row in rows:
+                family = row.get("family") or "-"
+                company = row.get("company") or "-"
+                extra = ""
+                if row.get("fit_score") is not None:
+                    extra = f" | score={row.get('fit_score')}"
+                typer.echo(
+                    f"- {row.get('title') or '(untitled)'} | {company} | "
+                    f"family={family}{extra}"
+                )
+    finally:
+        session.close()
+
+
+@jobs_app.command(name="mark-not-relevant")
+def mark_not_relevant_cmd(
+    job_id: str = typer.Argument(..., help="Job posting id"),
+    also_title_pattern: bool = typer.Option(
+        False,
+        "--also-title-pattern",
+        help="Also add an exact-title override pattern",
+    ),
+) -> None:
+    """Mark a job Other roles + append ~/.ganesha override (never deletes)."""
+    from packages.core.domain.models import JobPosting
+    from packages.core.services.role_relevance_overrides import mark_job_not_relevant
+
+    session: Session = SessionLocal()
+    try:
+        job = session.query(JobPosting).filter(JobPosting.id == job_id).one_or_none()
+        if job is None:
+            typer.echo("Job not found")
+            raise typer.Exit(code=1)
+        result = mark_job_not_relevant(
+            session, job, also_title_pattern=also_title_pattern
+        )
+        session.commit()
+        typer.echo(
+            f"Marked not relevant: job_id={result['job_id']} "
+            f"deleted={result['deleted']} overrides={len(result['overrides_appended'])}"
+        )
+    finally:
+        session.close()
+
+
+@jobs_app.command(name="scheduled-refresh")
+def scheduled_refresh_cmd(
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    skip_refresh: bool = typer.Option(False, "--skip-refresh"),
+    skip_score: bool = typer.Option(False, "--skip-score"),
+    skip_enrich: bool = typer.Option(False, "--skip-enrich"),
+    score_limit: int = typer.Option(50, "--score-limit"),
+    enrich_limit: int = typer.Option(25, "--enrich-limit"),
+) -> None:
+    """Opt-in: refresh + score new + enrich ready-to-apply (no browser/submit)."""
+    from packages.core.services.scheduled_refresh import run_scheduled_refresh
+
+    session: Session = SessionLocal()
+    try:
+        result = run_scheduled_refresh(
+            session,
+            dry_run=dry_run,
+            skip_refresh=skip_refresh,
+            skip_score=skip_score,
+            skip_enrich=skip_enrich,
+            score_limit=score_limit,
+            enrich_limit=enrich_limit,
+        )
+        if not dry_run:
+            session.commit()
+        data = result.to_dict()
+        typer.echo(
+            "Scheduled refresh: "
+            f"dry_run={data['dry_run']} errors={len(data.get('errors') or [])} "
+            f"opened_browser={data['opened_browser']} "
+            f"submitted={data['submitted_application']}"
+        )
+        typer.echo(f"  classify={data.get('classify')}")
+        typer.echo(f"  score={data.get('score')}")
+        typer.echo(f"  enrich={data.get('enrich')}")
+        for err in data.get("errors") or []:
+            typer.echo(f"  error: {err}")
     finally:
         session.close()
 
