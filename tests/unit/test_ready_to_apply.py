@@ -205,7 +205,7 @@ def test_list_ready_to_apply_greenhouse_only_with_platform_counts(monkeypatch) -
 
     monkeypatch.setattr(
         "packages.core.services.ready_to_apply.job_is_otherwise_ready",
-        lambda _s, job: True,
+        lambda _s, job, **_kw: True,
     )
 
     # Re-bind query properly for list function
