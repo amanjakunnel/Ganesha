@@ -122,6 +122,36 @@ def test_job_matches_ready_base_filters() -> None:
         ok5, _ = job_matches_ready_base(session, stub)  # type: ignore[arg-type]
         assert ok5 is False
 
+    mismatch = _job()
+    mismatch.intake_metadata = {
+        **(mismatch.intake_metadata or {}),
+        "role_profile": {
+            "status": "role_family_mismatch",
+            "matched_family": None,
+            "reason": "sales",
+        },
+    }
+    with (
+        patch(
+            "packages.core.services.ready_to_apply.resolve_job_eligibility",
+            return_value=SimpleNamespace(result="actionable"),
+        ),
+        patch(
+            "packages.core.services.ready_to_apply._has_prior_or_likely_applied",
+            return_value=False,
+        ),
+    ):
+        ok6, _ = job_matches_ready_base(session, mismatch)  # type: ignore[arg-type]
+        assert ok6 is False
+
+        mismatch = _job(title="Kitchen Operations Associate")
+        mismatch.intake_metadata = {
+            **(mismatch.intake_metadata or {}),
+            "role_profile": {"status": "role_family_mismatch"},
+        }
+        ok6, _ = job_matches_ready_base(session, mismatch)  # type: ignore[arg-type]
+        assert ok6 is False
+
 
 def test_list_ready_adapter_only_and_platform_counts() -> None:
     gh = _job(url="https://boards.greenhouse.io/acme/jobs/1")

@@ -131,8 +131,13 @@ def _has_prior_or_likely_applied(session: Session, job: JobPosting) -> bool:
 
 def job_matches_ready_base(session: Session, job: JobPosting) -> tuple[bool, str | None]:
     """Shared filters excluding platform/adapter. Returns (ok, band)."""
+    from packages.core.services.role_profile import is_role_family_mismatch
+
     elig = resolve_job_eligibility(job)
     if elig.result != ELIGIBILITY_ACTIONABLE:
+        return False, None
+    # Other-roles / Not-relevant mismatches never enter Ready-to-apply.
+    if is_role_family_mismatch(job):
         return False, None
     if not _job_description_verified(job):
         return False, None
