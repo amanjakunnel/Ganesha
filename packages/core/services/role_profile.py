@@ -244,7 +244,7 @@ _OUTSIDE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "sales",
         re.compile(
             r"\b(account executive|account manager|sales development|"
-            r"sales (?:rep|representative|manager|engineer|associate|director)|"
+            r"sales (?:rep|representative|manager|engineer|associate|director|specialist)|"
             r"business development|bdr\b|sdr\b|quota|pipeline generation|"
             r"enterprise sales|inside sales|customer success manager)\b",
             re.I,
@@ -264,7 +264,8 @@ _OUTSIDE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "finance",
         re.compile(
             r"\b(accountant|bookkeeper|controller|cpa\b|financial analyst|"
-            r"finance analyst|program finance|strategic finance|"
+            r"finance analyst|program finance|strategic finance|product finance|"
+            r"finance (?:manager|director|specialist)|"
             r"investment banker|audit associate|accounts payable|"
             r"accounts receivable|financial controller|fp&a\b|"
             r"treasury analyst)\b",

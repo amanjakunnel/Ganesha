@@ -148,6 +148,16 @@ def test_true_negatives_sales_recruiting_finance_fpga() -> None:
             "sales",
         ),
         (
+            "Sales Specialist - Lakebase",
+            "Own quota for Lakebase expansions with enterprise buyers.",
+            "sales",
+        ),
+        (
+            "Product Finance Senior Manager",
+            "Own product finance for cloud platform costs and operations.",
+            "finance",
+        ),
+        (
             "Talent Strategist",
             "Partner with hiring managers on talent acquisition.",
             "recruit",
