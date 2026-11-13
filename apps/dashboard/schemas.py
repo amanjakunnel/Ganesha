@@ -25,6 +25,7 @@ class FitFeedFilter(str, Enum):
     recommended_stretch = "recommended_stretch"
     needs_review = "needs_review"
     low_fit = "low_fit"
+    other_roles = "other_roles"
     all_eligible = "all_eligible"
     all = "all"
 
@@ -54,6 +55,8 @@ class JobDashboardItem(BaseModel):
     fit_score: int | None = None
     fit_reason: str | None = None
     fit_confidence: str | None = None
+    role_family_status: str | None = None
+    role_matched_family: str | None = None
     eligibility: str | None = None
     eligibility_reason: str | None = None
     eligibility_flags: list[str] = Field(default_factory=list)
@@ -76,6 +79,7 @@ class FitBandCounts(BaseModel):
     stretch: int = 0
     needs_review: int = 0
     low_fit: int = 0
+    other_roles: int = 0
     unscored: int = 0
     all_eligible: int = 0
 
