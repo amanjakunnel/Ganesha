@@ -590,6 +590,10 @@ def gmail_preview_cmd(
             )
         elif persist:
             typer.echo("Gmail persist skipped: matches=0")
+    finally:
+        session.close()
+
+
 @jobs_app.command(name="backfill-board-dates")
 def backfill_board_dates_cmd(
     dry_run: bool = typer.Option(
@@ -735,6 +739,53 @@ def assess_fit_batch_cmd(
         )
         for band, count in (result.get("bands") or {}).items():
             typer.echo(f"  {band}: {count}")
+    finally:
+        session.close()
+
+
+@jobs_app.command(name="score-remaining")
+def score_remaining_cmd(
+    batch_size: int = typer.Option(
+        200, "--batch-size", help="Jobs assessed per round"
+    ),
+    max_rounds: int = typer.Option(
+        100, "--max-rounds", help="Stop after this many rounds"
+    ),
+) -> None:
+    """Loop assess-fit-batch until no unscored role-matched jobs remain."""
+    from packages.core.services.job_score_service import score_remaining
+
+    session: Session = SessionLocal()
+    try:
+        typer.echo(
+            f"Scoring remaining (batch_size={batch_size}, max_rounds={max_rounds})…"
+        )
+
+        def _progress(msg: str) -> None:
+            typer.echo(msg)
+
+        result = score_remaining(
+            session,
+            batch_size=batch_size,
+            max_rounds=max_rounds,
+            progress_callback=_progress,
+        )
+        typer.echo(
+            "Score remaining: "
+            f"assessed={result['assessed']} rounds={result['rounds']} "
+            f"stopped={result.get('stopped_reason')}"
+        )
+        for band, count in (result.get("bands") or {}).items():
+            typer.echo(f"  {band}: {count}")
+        counts = result.get("feed_counts") or {}
+        if counts:
+            typer.echo(
+                "Feed counts: "
+                f"recommended_actionable={counts.get('recommended_actionable')} "
+                f"stretch_actionable={counts.get('stretch_actionable')} "
+                f"other_roles={counts.get('other_roles')} "
+                f"unscored_fit={counts.get('unscored_fit')}"
+            )
     finally:
         session.close()
 

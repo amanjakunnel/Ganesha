@@ -32,8 +32,8 @@
       <button type="button" class="btn" id="gmail-apply" hidden>Persist Gmail evidence</button>
       <button type="button" class="btn" id="reload">Reload</button>
     </div>
-    <p id="action-status" class="status-line" role="status"></p>
-    <p id="gmail-status" class="muted" hidden></p>
+    <p id="action-status" class="status-line progress-status" role="status" aria-live="polite"></p>
+    <p id="gmail-status" class="muted progress-status" hidden role="status" aria-live="polite"></p>
 
     <h2 class="group-heading">Strong evidence <span id="strong-count" class="muted"></span></h2>
     <p class="muted" style="font-size:0.85rem">Matching APPLIED record (same canonical URL + company), notes phrases, or Gmail confirmation.</p>
@@ -69,6 +69,7 @@
       </table>
     </div>
   </main>
+  <script src="/static/loading.js"></script>
   <script>
     function escapeHtml(v) {
       return String(v == null ? "" : v)
@@ -217,46 +218,51 @@
     document.getElementById("gmail-preview").addEventListener("click", async () => {
       const el = document.getElementById("gmail-status");
       const applyBtn = document.getElementById("gmail-apply");
-      el.hidden = false;
+      const btn = document.getElementById("gmail-preview");
+      const progress = new ProgressStatus(el, { control: btn });
       applyBtn.hidden = true;
       lastPreview = null;
-      el.textContent = "Running Gmail preview (may open a browser consent window)…";
+      progress.start("Running Gmail preview (may open a browser consent window)");
       try {
         const res = await fetch("/api/likely-applied/gmail-preview", { method: "POST" });
         const data = await res.json();
         lastPreview = data;
         if (data.setup_required) {
-          el.textContent = data.setup_message || "Gmail OAuth setup required.";
+          progress.setError(data.setup_message || "Gmail OAuth setup required.");
           return;
         }
-        el.textContent =
+        progress.setDone(
           `Preview (nothing written): scanned ${data.scanned}, matched ${data.matched}, ` +
-          `low-confidence ${data.low_confidence}, unmatched ${data.unmatched_aggregate}.`;
+            `low-confidence ${data.low_confidence}, unmatched ${data.unmatched_aggregate}.`
+        );
         if ((data.matched || 0) + (data.low_confidence || 0) > 0) {
           applyBtn.hidden = false;
         }
       } catch (err) {
-        el.textContent = "Gmail preview failed: " + (err && err.message ? err.message : err);
+        progress.setError("Gmail preview failed: " + (err && err.message ? err.message : err));
       }
     });
 
     document.getElementById("gmail-apply").addEventListener("click", async () => {
       const el = document.getElementById("gmail-status");
-      el.textContent = "Persisting Gmail evidence (no auto-promote)…";
+      const btn = document.getElementById("gmail-apply");
+      const progress = new ProgressStatus(el, { control: btn });
+      progress.start("Persisting Gmail evidence (no auto-promote)");
       try {
         const res = await fetch("/api/likely-applied/gmail-apply", { method: "POST" });
         const data = await res.json();
         if (!res.ok || data.setup_required) {
-          el.textContent = data.setup_message || data.error || "Persist failed.";
+          progress.setError(data.setup_message || data.error || "Persist failed.");
           return;
         }
-        el.textContent =
+        progress.setDone(
           `Persisted evidence: matched ${data.matched}, low-confidence ${data.low_confidence}. ` +
-          `Review the strong group; nothing was auto-promoted.`;
+            `Review the strong group; nothing was auto-promoted.`
+        );
         document.getElementById("gmail-apply").hidden = true;
         await load();
       } catch (err) {
-        el.textContent = "Persist failed: " + (err && err.message ? err.message : err);
+        progress.setError("Persist failed: " + (err && err.message ? err.message : err));
       }
     });
 

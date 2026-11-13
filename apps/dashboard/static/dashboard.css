@@ -359,6 +359,48 @@ select {
   font-size: 0.88rem;
 }
 
+.progress-status {
+  margin: 0.35rem 0 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+  min-height: 1.2em;
+}
+
+.progress-status.is-running {
+  color: var(--text);
+}
+
+.progress-status.is-done {
+  color: var(--accent);
+}
+
+.progress-status.is-error {
+  color: var(--danger);
+}
+
+.progress-ellipsis::after {
+  content: "";
+  display: inline-block;
+  width: 1.2em;
+  text-align: left;
+  animation: progress-dots 1.2s steps(4, end) infinite;
+}
+
+@keyframes progress-dots {
+  0% { content: ""; }
+  25% { content: "."; }
+  50% { content: ".."; }
+  75% { content: "..."; }
+  100% { content: ""; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-ellipsis::after {
+    animation: none;
+    content: "...";
+  }
+}
+
 .refresh-fail {
   color: var(--danger);
 }

@@ -776,18 +776,21 @@ def assess_fit_batch(
     facts = usable_facts(session)
     blob = _evidence_blob(facts)
 
-    jobs = (
+    # Prefer jobs that still lack evidence_fit so batches progress through the
+    # corpus instead of re-scanning the same recent scored rows.
+    pool = (
         session.query(JobPosting)
         .order_by(JobPosting.created_at.desc())
-        .limit(max(limit * 8, 200))
         .all()
     )
+    candidates = [job for job in pool if not get_stored_fit(job)]
+
     assessed = 0
     skipped_mismatch = 0
     skipped_scored = 0
     bands: dict[str, int] = {}
 
-    for job in jobs:
+    for job in candidates:
         if assessed >= limit:
             break
         if get_stored_fit(job):
