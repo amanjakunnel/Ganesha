@@ -54,6 +54,8 @@ def find_duplicate_job(session: Session, data: dict[str, Any]) -> DedupeResult:
     warnings: list[str] = []
 
     import_key = data.get("source_import_key")
+    source_name = data.get("source_name")
+    board_sources = frozenset({"greenhouse", "lever", "ashby", "board_api"})
     if import_key:
         by_key, warn = _first_match(
             session,
@@ -64,9 +66,26 @@ def find_duplicate_job(session: Session, data: dict[str, Any]) -> DedupeResult:
             warnings.append(warn)
         if by_key:
             return DedupeResult(True, by_key.id, ["source_import_key"], warnings)
+        # Board import keys are authoritative: skip fuzzy URL/hash scans that
+        # otherwise load every apply URL for each new board row (O(n²)).
+        if (source_name or "") in board_sources:
+            external_id = data.get("external_id")
+            if external_id and source_name:
+                by_ext, warn = _first_match(
+                    session,
+                    JobPosting.external_id == external_id,
+                    JobPosting.source_name == source_name,
+                    warning_key=f"external_id:{source_name}:{external_id}",
+                )
+                if warn:
+                    warnings.append(warn)
+                if by_ext:
+                    return DedupeResult(
+                        True, by_ext.id, ["external_id+source_name"], warnings
+                    )
+            return DedupeResult(False, None, [], warnings)
 
     external_id = data.get("external_id")
-    source_name = data.get("source_name")
     if external_id and source_name:
         by_ext, warn = _first_match(
             session,
@@ -86,8 +105,19 @@ def find_duplicate_job(session: Session, data: dict[str, Any]) -> DedupeResult:
     company = data.get("company") or ""
 
     if apply_url:
+        # Lean projection only — never pull description_text blobs for URL matching.
+        from sqlalchemy.orm import load_only
+
         candidates = (
             session.query(JobPosting)
+            .options(
+                load_only(
+                    JobPosting.id,
+                    JobPosting.company_apply_url,
+                    JobPosting.title,
+                    JobPosting.company_id,
+                )
+            )
             .filter(JobPosting.company_apply_url.is_not(None))
             .all()
         )
