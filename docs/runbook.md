@@ -11,6 +11,16 @@ Setup (first time)
 4. Initialize DB and run migrations:
    make migrate
 
+Startup (local dashboard)
+-------------------------
+```bash
+cd /path/to/Ganesha
+PYTHONPATH=. .venv/bin/python -m apps.cli.main dashboard run --port 8000
+```
+
+See also: [job-feed-refresh.md](job-feed-refresh.md), [scheduled-refresh.md](scheduled-refresh.md),
+[gmail-readonly-matching.md](gmail-readonly-matching.md), [git-workflow.md](git-workflow.md).
+
 Common tasks
 ------------
 - Run unit tests:
@@ -31,6 +41,15 @@ Common tasks
 - Sheets initialization (creates tabs if missing):
   make sheets-init
 
+- Role-family audit samples:
+  `python -m apps.cli.main jobs audit-role-feed`
+
+- Refresh + score + enrich (opt-in scheduler path):
+  `python -m apps.cli.main jobs scheduled-refresh --dry-run`
+
+- Ready-to-apply: prepare from the job detail page; enrichment for ready
+  candidates is part of `jobs scheduled-refresh` (never auto-submit).
+
 Resume generation
 -----------------
 See `docs/resume-generation.md` for corpus scan, doctor, generate, Desktop PDF
@@ -45,5 +64,6 @@ python -m apps.cli.main resumes generate <job-id> --deterministic-only
 Notes
 -----
 - Keep `.env` and credential files local and out of git.
+- Gmail / role-profile / overrides live under `~/.ganesha/` (outside the repo).
 - The default `DRY_RUN=true` ensures no accidental final submissions occur.
 - Use the FrozenClock in tests to simulate timers and referral hold expirations.

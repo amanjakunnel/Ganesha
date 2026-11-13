@@ -27,14 +27,32 @@ STATUS_MISMATCH = "role_family_mismatch"
 STATUS_UNSCORED = "unscored"
 
 # Seed matchers used only when evidence supports them — never emitted wholesale.
+# Title patterns intentionally avoid bare "platform" / "infrastructure" /
+# "systems engineer" / "build engineer" (too many non-software hits).
+# Keywords split into strong (count 1) vs weak (count 0.5, never alone).
 _FAMILY_SEEDS: tuple[dict[str, Any], ...] = (
     {
         "id": "cloud_platform",
         "label": "Cloud / Platform / Infrastructure",
         "title_patterns": (
-            r"\b(platform|infrastructure|cloud|sre|site reliability|"
-            r"devops|systems? engineer)\b",
+            r"\b(platform engineer|cloud engineer|infrastructure engineer|"
+            r"cloud(?:\s|/|-)?(?:platform|infrastructure)|sre\b|"
+            r"site reliability|devops engineer|systems? software engineer)\b",
         ),
+        "strong_keywords": (
+            "kubernetes",
+            "k8s",
+            "terraform",
+            "aws",
+            "gcp",
+            "azure",
+            "docker",
+            "ci/cd",
+            "helm",
+            "eks",
+            "gke",
+        ),
+        "weak_keywords": ("infrastructure", "platform", "cloud"),
         "responsibility_keywords": (
             "kubernetes",
             "aws",
@@ -57,8 +75,20 @@ _FAMILY_SEEDS: tuple[dict[str, Any], ...] = (
         "label": "DevOps / SRE",
         "title_patterns": (
             r"\b(devops|sre|site reliability|reliability engineer|"
-            r"release engineer|build engineer)\b",
+            r"release engineer|ci/?cd engineer)\b",
         ),
+        "strong_keywords": (
+            "observability",
+            "prometheus",
+            "grafana",
+            "jenkins",
+            "ansible",
+            "on-call",
+            "incident response",
+            "sre",
+            "devops",
+        ),
+        "weak_keywords": ("monitoring", "incident", "pipeline"),
         "responsibility_keywords": (
             "observability",
             "monitoring",
@@ -79,8 +109,21 @@ _FAMILY_SEEDS: tuple[dict[str, Any], ...] = (
         "id": "backend",
         "label": "Backend Engineering",
         "title_patterns": (
-            r"\b(backend|back[- ]end|api engineer|server[- ]side)\b",
+            r"\b(backend|back[- ]end|api engineer|server[- ]side|"
+            r"services? engineer)\b",
         ),
+        "strong_keywords": (
+            "backend",
+            "microservices",
+            "grpc",
+            "postgresql",
+            "fastapi",
+            "django",
+            "flask",
+            "spring boot",
+            "rest api",
+        ),
+        "weak_keywords": ("api", "rest", "database", "sql"),
         "responsibility_keywords": (
             "api",
             "backend",
@@ -101,8 +144,20 @@ _FAMILY_SEEDS: tuple[dict[str, Any], ...] = (
         "id": "software_engineering",
         "label": "General Software Engineering",
         "title_patterns": (
-            r"\b(software engineer|swe|full[- ]?stack|application engineer)\b",
+            r"\b(software engineer|software developer|swe\b|full[- ]?stack|"
+            r"application engineer|software development engineer)\b",
         ),
+        "strong_keywords": (
+            "software engineer",
+            "software development",
+            "typescript",
+            "javascript",
+            "golang",
+            "c++",
+            "python",
+            "java",
+        ),
+        "weak_keywords": ("linux", "coding", "programming"),
         "responsibility_keywords": (
             "software engineer",
             "python",
@@ -123,8 +178,18 @@ _FAMILY_SEEDS: tuple[dict[str, Any], ...] = (
         "id": "distributed_systems",
         "label": "Distributed Systems",
         "title_patterns": (
-            r"\b(distributed systems?|systems? software|scalability)\b",
+            r"\b(distributed systems?|systems? software|scalability engineer)\b",
         ),
+        "strong_keywords": (
+            "distributed systems",
+            "kafka",
+            "consensus",
+            "raft",
+            "event-driven",
+            "message queue",
+            "rabbitmq",
+        ),
+        "weak_keywords": ("distributed", "scalability", "throughput", "latency", "queue"),
         "responsibility_keywords": (
             "distributed",
             "consensus",
@@ -144,9 +209,19 @@ _FAMILY_SEEDS: tuple[dict[str, Any], ...] = (
         "id": "ml_systems",
         "label": "ML / Systems",
         "title_patterns": (
-            r"\b(machine learning|ml engineer|mlops|ai engineer|"
-            r"deep learning)\b",
+            r"\b(machine learning engineer|ml engineer|mlops|ai engineer|"
+            r"deep learning engineer|ml systems)\b",
         ),
+        "strong_keywords": (
+            "pytorch",
+            "tensorflow",
+            "mlops",
+            "model training",
+            "inference",
+            "deep learning",
+            "scikit",
+        ),
+        "weak_keywords": ("model", "training", "machine learning"),
         "responsibility_keywords": (
             "pytorch",
             "tensorflow",
@@ -168,16 +243,20 @@ _OUTSIDE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "sales",
         re.compile(
-            r"\b(account executive|sales (?:rep|representative|manager|engineer)|"
-            r"business development|bdr\b|sdr\b|quota|pipeline generation)\b",
+            r"\b(account executive|account manager|sales development|"
+            r"sales (?:rep|representative|manager|engineer|associate|director|specialist)|"
+            r"business development|bdr\b|sdr\b|quota|pipeline generation|"
+            r"enterprise sales|inside sales|customer success manager)\b",
             re.I,
         ),
     ),
     (
         "recruiting",
         re.compile(
-            r"\b(recruiter|recruiting|talent acquisition|sourcer|"
-            r"people partner|hr business partner)\b",
+            r"\b(recruiter|recruiting|talent acquisition|talent (?:partner|"
+            r"strategist|sourcer|manager)|sourcer|people partner|"
+            r"hr business partner|people operations|human resources|"
+            r"university recruiter|technical recruiter)\b",
             re.I,
         ),
     ),
@@ -185,7 +264,11 @@ _OUTSIDE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "finance",
         re.compile(
             r"\b(accountant|bookkeeper|controller|cpa\b|financial analyst|"
-            r"investment banker|audit associate)\b",
+            r"finance analyst|program finance|strategic finance|product finance|"
+            r"finance (?:manager|director|specialist)|"
+            r"investment banker|audit associate|accounts payable|"
+            r"accounts receivable|financial controller|fp&a\b|"
+            r"treasury analyst)\b",
             re.I,
         ),
     ),
@@ -193,7 +276,74 @@ _OUTSIDE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "marketing",
         re.compile(
             r"\b(marketing manager|growth marketer|brand manager|"
-            r"content marketer|seo specialist|demand gen)\b",
+            r"content marketer|seo specialist|demand gen|"
+            r"product marketing|growth marketing|field marketing)\b",
+            re.I,
+        ),
+    ),
+    (
+        "legal",
+        re.compile(
+            r"\b(attorney|lawyer|counsel\b|paralegal|legal operations|"
+            r"legal counsel|general counsel|privacy counsel|"
+            r"product counsel|employment attorney|contract manager)\b",
+            re.I,
+        ),
+    ),
+    (
+        "procurement",
+        re.compile(
+            r"\b(buyer\b|purchasing|procurement|category manager|"
+            r"vendor manager|strategic sourcing)\b",
+            re.I,
+        ),
+    ),
+    (
+        "hr_facilities",
+        re.compile(
+            r"\b(office manager|facilities manager|workplace experience|"
+            r"people experience|hr coordinator|benefits specialist|"
+            r"compensation analyst|office (?:&|and) events)\b",
+            re.I,
+        ),
+    ),
+    (
+        "ops_logistics",
+        re.compile(
+            r"\b(logistics specialist|supply manager|supply chain|"
+            r"warehouse|events manager|field operations|"
+            r"kitchen operations|operations specialist|"
+            r"global trade manager|production planning)\b",
+            re.I,
+        ),
+    ),
+    (
+        "manufacturing_mech",
+        re.compile(
+            r"\b(manufacturing engineer|mechanical engineer|avionics|"
+            r"composites|energetics|machine maintenance|ehs\b|"
+            r"environmental health|technician|dfma|mass properties|"
+            r"static structures|vehicle performance|gnc intern|"
+            r"harness engineer|quality engineer|supplier quality|"
+            r"sourcing specialist|electrical engineer|"
+            r"pcb design|aircraft configuration)\b",
+            re.I,
+        ),
+    ),
+    (
+        "program_non_swe",
+        re.compile(
+            r"\b(program manager|project manager|scrum master|"
+            r"technical program manager|capture manager|"
+            r"engineering program manager)\b",
+            re.I,
+        ),
+    ),
+    (
+        "design_non_swe",
+        re.compile(
+            r"\b(product designer|ux designer|ui designer|graphic designer|"
+            r"visual designer|design manager)\b",
             re.I,
         ),
     ),
@@ -205,6 +355,26 @@ _OUTSIDE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             re.I,
         ),
     ),
+)
+
+# Titles that are clearly non-software unless the title itself carries SWE tokens.
+_CLEAR_NON_SOFTWARE_TITLE = re.compile(
+    r"\b(attorney|lawyer|paralegal|counsel\b|accountant|bookkeeper|"
+    r"recruiter|talent (?:partner|strategist|acquisition)|"
+    r"account executive|sales development|buyer\b|purchasing|"
+    r"procurement|marketing manager|events manager|logistics|"
+    r"warehouse|accounts payable|financial analyst|finance analyst|"
+    r"ehs\b|avionics technician|composites|kitchen operations|"
+    r"driver\b|cashier|nurse|teacher|mechanical engineer|"
+    r"manufacturing engineer|office manager|facilities)\b",
+    re.I,
+)
+_SOFTWARE_TITLE_TOKEN = re.compile(
+    r"\b(software|swe\b|backend|front[- ]?end|full[- ]?stack|devops|sre\b|"
+    r"platform engineer|infrastructure engineer|ml eng|machine learning|"
+    r"data engineer|site reliability|cloud engineer|distributed|"
+    r"firmware|embedded software)\b",
+    re.I,
 )
 
 
@@ -544,6 +714,7 @@ def _family_title_match(family: RoleFamily, title: str) -> bool:
 
 
 def _family_desc_match(family: RoleFamily, description: str) -> int:
+    """Legacy integer hit count (weak+strong keywords equally)."""
     blob = description.lower()
     hits = 0
     for kw in family.responsibility_keywords:
@@ -552,16 +723,56 @@ def _family_desc_match(family: RoleFamily, description: str) -> int:
     return hits
 
 
+def _seed_for_family(family_id: str) -> dict[str, Any] | None:
+    for seed in _FAMILY_SEEDS:
+        if seed["id"] == family_id:
+            return seed
+    return None
+
+
+def _family_desc_score(family: RoleFamily, description: str) -> float:
+    """Weighted description overlap: strong keywords count 1, weak 0.5."""
+    blob = description.lower()
+    seed = _seed_for_family(family.id)
+    if seed is None:
+        return float(_family_desc_match(family, description))
+    score = 0.0
+    for kw in seed.get("strong_keywords") or ():
+        if str(kw).lower() in blob:
+            score += 1.0
+    for kw in seed.get("weak_keywords") or ():
+        if str(kw).lower() in blob:
+            score += 0.5
+    return score
+
+
 def classify_job_against_profile(
     job: JobPosting,
     profile: RoleProfile,
     *,
     candidate_blob: str = "",
+    skip_overrides: bool = False,
+    relevance_overrides: Any | None = None,
 ) -> dict[str, Any]:
     """Layer-1: cheap role-family gate. Does not change fit scoring."""
     title = job.title or ""
     description = job.description_text or ""
     enabled = profile.enabled_families()
+
+    if not skip_overrides:
+        from packages.core.services.role_relevance_overrides import (
+            REASON_USER_NOT_RELEVANT,
+            override_matches_job,
+        )
+
+        hit = override_matches_job(job, relevance_overrides)
+        if hit is not None:
+            return {
+                "matched_family": None,
+                "status": STATUS_MISMATCH,
+                "reason": REASON_USER_NOT_RELEVANT,
+                "user_override": True,
+            }
 
     # Hardware / specialist outsides — reuse evidence_fit detector when possible.
     if candidate_blob:
@@ -575,31 +786,52 @@ def classify_job_against_profile(
                 "reason": reason or "Specialist domain outside candidate evidence",
             }
 
+    soft_title = bool(_SOFTWARE_TITLE_TOKEN.search(title))
     soft_desc = bool(
         re.search(
-            r"\b(software|backend|platform|api|kubernetes|python|java|"
-            r"distributed|devops|infrastructure)\b",
+            r"\b(software engineer|backend|kubernetes|terraform|microservices|"
+            r"distributed systems|devops|site reliability|pytorch|fastapi)\b",
             description,
             flags=re.I,
         )
     )
+
+    # Clear non-software titles never pass on boilerplate alone.
+    if _CLEAR_NON_SOFTWARE_TITLE.search(title) and not soft_title:
+        return {
+            "matched_family": None,
+            "status": STATUS_MISMATCH,
+            "reason": "Non-software title without software title signal",
+        }
+
     for label, pattern in _OUTSIDE_PATTERNS:
         title_hit = bool(pattern.search(title))
         desc_hit = bool(description and pattern.search(description[:2500]))
         if not title_hit and not desc_hit:
             continue
-        if label == "hardware_design":
-            # Title-only hardware without software context → mismatch.
-            if title_hit and not soft_desc:
+        if label in {
+            "hardware_design",
+            "manufacturing_mech",
+            "program_non_swe",
+            "design_non_swe",
+        }:
+            # Title hit without software title token → mismatch.
+            # Description-only outside: ignore when JD is clearly software.
+            if title_hit and not soft_title:
+                return {
+                    "matched_family": None,
+                    "status": STATUS_MISMATCH,
+                    "reason": f"Outside role family: {label}",
+                }
+            if desc_hit and not soft_title and not soft_desc:
                 return {
                     "matched_family": None,
                     "status": STATUS_MISMATCH,
                     "reason": f"Outside role family: {label}",
                 }
             continue
-        # Sales/recruiting/finance/marketing: title match always excludes.
-        # Description-only match excludes unless the JD is clearly software.
-        if title_hit or (desc_hit and not soft_desc):
+        # Sales/recruiting/finance/marketing/legal/ops: title match always excludes.
+        if title_hit or (desc_hit and not soft_title and not soft_desc):
             return {
                 "matched_family": None,
                 "status": STATUS_MISMATCH,
@@ -607,28 +839,41 @@ def classify_job_against_profile(
             }
 
     best_id: str | None = None
-    best_score = 0
+    best_score = 0.0
+    best_title_hit = False
     for fam in enabled:
-        score = 0
-        if _family_title_match(fam, title):
-            score += 3
-        desc_hits = _family_desc_match(fam, description)
-        score += min(3, desc_hits)
+        score = 0.0
+        title_hit = _family_title_match(fam, title)
+        if title_hit:
+            score += 3.0
+        desc_score = _family_desc_score(fam, description)
+        # Cap description contribution; weak keywords alone cannot reach threshold.
+        score += min(3.0, desc_score)
         if score > best_score:
             best_score = score
             best_id = fam.id
+            best_title_hit = title_hit
 
-    if best_score >= 3:
+    # Require a real title family hit, or strong description evidence (≥2.5).
+    if best_title_hit and best_score >= 3.0:
+        return {
+            "matched_family": best_id,
+            "status": STATUS_MATCHED,
+            "reason": f"Matched profile family '{best_id}'",
+        }
+    if not best_title_hit and best_score >= 3.5 and soft_desc:
         return {
             "matched_family": best_id,
             "status": STATUS_MATCHED,
             "reason": f"Matched profile family '{best_id}'",
         }
 
-    # Unfamiliar title: description keyword overlap with enabled families → pass.
-    if description.strip() and enabled:
+    # Unfamiliar title: keep pass when description has strong family evidence.
+    # Do not pass on weak boilerplate keywords alone (~20% prior mismatch).
+    if description.strip() and enabled and not _CLEAR_NON_SOFTWARE_TITLE.search(title):
         for fam in enabled:
-            if _family_desc_match(fam, description) >= 2:
+            strong = _family_desc_score(fam, description)
+            if strong >= 2.5 and (soft_desc or soft_title):
                 return {
                     "matched_family": fam.id,
                     "status": STATUS_MATCHED,
@@ -645,21 +890,13 @@ def classify_job_against_profile(
             "reason": "No role families enabled; allowing Layer-2",
         }
 
-    # Sparse / unknown titles: allow Layer-2 only when description has
-    # at least one software-ish token from the enabled profile; otherwise
-    # park in Other roles (never delete).
+    # Sparse / unknown titles: allow Layer-2 only when title itself is software-ish.
     if len(description.strip()) < 80:
-        soft = re.search(
-            r"\b(software|backend|platform|api|kubernetes|python|java|"
-            r"distributed|devops|infrastructure|sre|cloud)\b",
-            f"{title}\n{description}",
-            flags=re.I,
-        )
-        if soft:
+        if soft_title:
             return {
                 "matched_family": None,
                 "status": STATUS_MATCHED,
-                "reason": "Sparse description with software signal; deferring to Layer-2",
+                "reason": "Sparse description with software title; deferring to Layer-2",
             }
         return {
             "matched_family": None,
@@ -676,11 +913,14 @@ def classify_job_against_profile(
 
 def store_role_classification(job: JobPosting, result: dict[str, Any]) -> None:
     meta = dict(job.intake_metadata or {})
-    meta["role_profile"] = {
+    block: dict[str, Any] = {
         "matched_family": result.get("matched_family"),
         "status": result.get("status"),
         "reason": result.get("reason"),
     }
+    if result.get("user_override"):
+        block["user_override"] = True
+    meta["role_profile"] = block
     job.intake_metadata = meta
 
 
@@ -822,6 +1062,20 @@ def assess_fit_batch(
     }
 
 
+def _job_company_label(job: JobPosting) -> str:
+    company = getattr(job, "company", None)
+    if company is not None:
+        name = getattr(company, "canonical_name", None)
+        if name:
+            return str(name)
+    meta = job.intake_metadata or {}
+    for key in ("company_name", "company"):
+        val = meta.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return ""
+
+
 def feed_counts_snapshot(session: Session) -> dict[str, Any]:
     """Recommended / Stretch / Other roles counts + sample titles."""
     from packages.core.services.evidence_fit_service import (
@@ -877,5 +1131,111 @@ def feed_counts_snapshot(session: Session) -> dict[str, Any]:
             "recommended": recommended,
             "stretch": stretch,
             "other_roles": other,
+        },
+    }
+
+
+def audit_role_feed_samples(
+    session: Session,
+    *,
+    per_bucket: int = 20,
+    reclassify: bool = False,
+) -> dict[str, Any]:
+    """Sample jobs from role-matched / Recommended / Stretch for QA audit.
+
+    Prints-friendly structure: title, company, family (and fit band when present).
+    When reclassify=True, Layer-1 is recomputed in-memory (not persisted).
+    """
+    from sqlalchemy.orm import joinedload
+
+    from packages.core.services.evidence_fit_service import (
+        BAND_RECOMMENDED,
+        BAND_STRETCH,
+        get_stored_fit,
+    )
+    from packages.core.services.job_eligibility import (
+        ELIGIBILITY_ACTIONABLE,
+        resolve_job_eligibility,
+    )
+
+    profile = load_role_profile(session, refresh=False)
+    blob = ""
+    if reclassify:
+        from apps.resume_generation.services.resume_fact_service import usable_facts
+
+        blob = _evidence_blob(usable_facts(session))
+
+    jobs = (
+        session.query(JobPosting)
+        .options(joinedload(JobPosting.company))
+        .order_by(JobPosting.created_at.desc())
+        .limit(5000)
+        .all()
+    )
+
+    role_matched: list[dict[str, Any]] = []
+    recommended: list[dict[str, Any]] = []
+    stretch: list[dict[str, Any]] = []
+
+    for job in jobs:
+        block = get_stored_role_block(job) or {}
+        if reclassify:
+            result = classify_job_against_profile(job, profile, candidate_blob=blob)
+            status = result.get("status")
+            family = result.get("matched_family")
+            reason = result.get("reason")
+        else:
+            status = block.get("status")
+            family = block.get("matched_family")
+            reason = block.get("reason")
+
+        company = _job_company_label(job)
+        base = {
+            "title": job.title or "",
+            "company": company,
+            "family": family,
+            "reason": reason,
+            "job_id": job.id,
+        }
+
+        if (
+            status == STATUS_MATCHED
+            and len(role_matched) < per_bucket
+        ):
+            role_matched.append(base)
+
+        if status == STATUS_MISMATCH:
+            continue
+        elig = resolve_job_eligibility(job)
+        if elig.result != ELIGIBILITY_ACTIONABLE:
+            continue
+        fit = get_stored_fit(job) or {}
+        band = fit.get("band")
+        scored = {
+            **base,
+            "family": family or block.get("matched_family"),
+            "fit_band": band,
+            "fit_score": fit.get("score"),
+        }
+        if band == BAND_RECOMMENDED and len(recommended) < per_bucket:
+            recommended.append(scored)
+        elif band == BAND_STRETCH and len(stretch) < per_bucket:
+            stretch.append(scored)
+
+        if (
+            len(role_matched) >= per_bucket
+            and len(recommended) >= per_bucket
+            and len(stretch) >= per_bucket
+        ):
+            break
+
+    return {
+        "per_bucket": per_bucket,
+        "reclassify": reclassify,
+        "family_ids": [f.id for f in profile.enabled_families()],
+        "buckets": {
+            "role_matched": role_matched,
+            "recommended": recommended,
+            "stretch": stretch,
         },
     }

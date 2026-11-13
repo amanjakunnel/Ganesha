@@ -36,29 +36,64 @@ CLIENT_SECRETS_PATH = TOKEN_DIR / "client_secret.json"
 TOKEN_PATH = TOKEN_DIR / "token.json"
 
 # Bounded search — confirmation-style subjects + common ATS noreply senders.
+# Sender domains are ATS hosts (not employers); employer is parsed from
+# display-name / subject transiently during match.
 DEFAULT_QUERY = (
     "("
     'subject:"thank you for applying" OR '
     'subject:"thanks for applying" OR '
+    'subject:"your application to" OR '
     'subject:"application received" OR '
     'subject:"we received your application" OR '
     'subject:"application was received" OR '
     'subject:"thanks for your interest" OR '
     'subject:"we have received your application" OR '
     'subject:"your application has been received" OR '
+    'subject:"application received -" OR '
     "from:noreply@greenhouse.io OR "
     "from:no-reply@greenhouse.io OR "
     "from:noreply@lever.co OR "
     "from:no-reply@lever.co OR "
     "from:jobs@ashbyhq.com OR "
-    "from:noreply@ashbyhq.com"
+    "from:noreply@ashbyhq.com OR "
+    "from:myworkday.com OR "
+    "from:workday.com OR "
+    "from:amazon.jobs OR "
+    "from:noreply@amazon.com"
     ")"
 )
 DEFAULT_DAYS = 365
-DEFAULT_MAX_RESULTS = 100
+DEFAULT_MAX_RESULTS = 200
 RATE_LIMIT_SLEEP_S = 0.25
 _GENERIC_ROLE_TOKENS = frozenset(
     {"engineer", "software", "engineering", "developer", "intern", "new", "grad"}
+)
+_ATS_SENDER_DOMAINS = frozenset(
+    {
+        "greenhouse.io",
+        "lever.co",
+        "ashbyhq.com",
+        "myworkday.com",
+        "workday.com",
+        "amazon.jobs",
+        "amazonses.com",
+        "icims.com",
+        "smartrecruiters.com",
+        "jobvite.com",
+    }
+)
+
+_EMPLOYER_FROM_SUBJECT_RE = re.compile(
+    r"(?:"
+    r"thank(?:s| you) for applying(?: to)?\s+(?P<co1>.+?)(?:\s*[-–—|:].*)?$"
+    r"|"
+    r"your application to\s+(?P<co2>.+?)(?:\s*[-–—|:].*)?$"
+    r"|"
+    r"application received\s*[-–—:]\s*(?P<role>.+?)\s+at\s+(?P<co3>.+?)$"
+    r"|"
+    r"(?P<role2>.+?)\s+at\s+(?P<co4>.+?)(?:\s*[-–—|:].*)?$"
+    r")",
+    re.IGNORECASE,
 )
 
 
@@ -67,8 +102,11 @@ class GmailMessageMeta:
     message_id: str
     received_at: datetime | None
     sender_domain: str | None
-    # Minimal subject snippet used only for matching; not persisted beyond match.
+    # Transient match hints — never persisted beyond the match step.
     subject_hint: str = ""
+    sender_display_name: str = ""
+    parsed_employer: str = ""
+    parsed_role: str = ""
 
 
 @dataclass
@@ -154,6 +192,75 @@ def gmail_ready() -> bool:
     return CLIENT_SECRETS_PATH.is_file()
 
 
+def gmail_token_status() -> dict[str, Any]:
+    """Non-secret OAuth token health for dashboard notices.
+
+    Never returns token contents. status: missing_secrets | missing_token |
+    valid | expired | invalid.
+    """
+    if not CLIENT_SECRETS_PATH.is_file():
+        return {
+            "status": "missing_secrets",
+            "message": "Gmail client secret missing — see docs/gmail-readonly-matching.md",
+            "token_present": False,
+        }
+    if not TOKEN_PATH.is_file():
+        return {
+            "status": "missing_token",
+            "message": "Gmail token not authorized yet (preview will open consent).",
+            "token_present": False,
+        }
+    try:
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+    except ImportError:
+        return {
+            "status": "invalid",
+            "message": "Gmail Google API libraries not installed.",
+            "token_present": True,
+        }
+    try:
+        creds = Credentials.from_authorized_user_file(  # type: ignore[no-untyped-call]
+            str(TOKEN_PATH), [GMAIL_SCOPE]
+        )
+    except Exception:
+        return {
+            "status": "invalid",
+            "message": "Gmail token file is unreadable or invalid. Re-authorize.",
+            "token_present": True,
+        }
+    if creds.valid:
+        return {
+            "status": "valid",
+            "message": None,
+            "token_present": True,
+        }
+    if creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(Request())
+            TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
+            TOKEN_PATH.chmod(0o600)
+            return {
+                "status": "valid",
+                "message": None,
+                "token_present": True,
+            }
+        except Exception:
+            return {
+                "status": "expired",
+                "message": (
+                    "Gmail token expired/invalid. Re-run Gmail preview to re-consent, "
+                    "or revoke and delete ~/.ganesha/gmail/token.json."
+                ),
+                "token_present": True,
+            }
+    return {
+        "status": "invalid",
+        "message": "Gmail token invalid. Re-authorize via Gmail preview.",
+        "token_present": True,
+    }
+
+
 def _sender_domain(from_header: str | None) -> str | None:
     if not from_header:
         return None
@@ -161,6 +268,95 @@ def _sender_domain(from_header: str | None) -> str | None:
     if not m:
         return None
     return m.group(1).lower().rstrip(".")
+
+
+def parse_from_header(from_header: str | None) -> tuple[str, str | None]:
+    """Return (display_name, sender_domain) from a From header."""
+    if not from_header:
+        return "", None
+    domain = _sender_domain(from_header)
+    display = ""
+    # "Acme Careers" <noreply@greenhouse.io>
+    m = re.match(r'"([^"]+)"\s*<', from_header.strip())
+    if m:
+        display = m.group(1).strip()
+    else:
+        m = re.match(r"([^<]+)<", from_header.strip())
+        if m:
+            display = m.group(1).strip().strip('"')
+    # Strip common ATS suffixes from display names.
+    display = re.sub(
+        r"\b(careers|jobs|talent|recruiting|noreply|no[- ]reply)\b",
+        "",
+        display,
+        flags=re.I,
+    )
+    display = re.sub(r"\s{2,}", " ", display).strip(" -|:")
+    return display, domain
+
+
+def _is_ats_domain(domain: str | None) -> bool:
+    if not domain:
+        return False
+    d = domain.lower()
+    return any(d == ats or d.endswith("." + ats) for ats in _ATS_SENDER_DOMAINS)
+
+
+def parse_employer_and_role(
+    *,
+    subject: str = "",
+    display_name: str = "",
+) -> tuple[str, str]:
+    """Transiently extract (employer, role) from subject / sender display name.
+
+    ATS sender domains are not employers — prefer display name + subject patterns
+    like 'Thank you for applying to X', 'Your application to X',
+    'Application received - Role at X'.
+    """
+    employer = ""
+    role = ""
+    subj = (subject or "").strip()
+    if subj:
+        m = _EMPLOYER_FROM_SUBJECT_RE.search(subj)
+        if m:
+            employer = (
+                m.groupdict().get("co1")
+                or m.groupdict().get("co2")
+                or m.groupdict().get("co3")
+                or m.groupdict().get("co4")
+                or ""
+            ).strip(" -–—|:")
+            role = (
+                m.groupdict().get("role") or m.groupdict().get("role2") or ""
+            ).strip(" -–—|:")
+        # Fallback: "... at Company"
+        if not employer:
+            at = re.search(r"\bat\s+([A-Za-z0-9][\w .,&'-]{1,80})$", subj, re.I)
+            if at:
+                employer = at.group(1).strip(" -–—|:")
+    if not employer and display_name:
+        employer = display_name.strip()
+    # Role often appears before " at " or after an em-dash.
+    if not role and subj:
+        dash = re.search(
+            r"[-–—:]\s*([A-Za-z][^|]+?)(?:\s+at\s+|$)", subj
+        )
+        if dash:
+            cand = dash.group(1).strip()
+            if cand.lower() not in {"thank you for applying", "application received"}:
+                role = cand
+    return employer.strip(), role.strip()
+
+
+def enrich_message_meta(meta: GmailMessageMeta) -> GmailMessageMeta:
+    """Fill parsed_employer / parsed_role from transient subject + display name."""
+    employer, role = parse_employer_and_role(
+        subject=meta.subject_hint,
+        display_name=meta.sender_display_name,
+    )
+    meta.parsed_employer = employer
+    meta.parsed_role = role
+    return meta
 
 
 def _normalize_company(name: str) -> str:
@@ -216,11 +412,13 @@ def days_covering_saved_only(session: Session, *, fallback: int = DEFAULT_DAYS) 
     """Widen search days to cover saved_only date span (bounded)."""
     lo, hi, _count = saved_only_date_span(session)
     if lo is None:
-        return fallback
+        return max(fallback, 400)
     now = datetime.now(UTC)
-    span_days = max(1, int((now - lo).total_seconds() // 86400) + 14)
-    # Bound: at least fallback, at most 5 years.
-    return max(fallback, min(span_days, 365 * 5))
+    # Pad 30 days past the oldest saved_only signal so confirmations nearby
+    # are not clipped by timezone / late ATS mail.
+    span_days = max(1, int((now - lo).total_seconds() // 86400) + 30)
+    # Bound: at least max(fallback, 400), at most 5 years.
+    return max(fallback, 400, min(span_days, 365 * 5))
 
 
 def build_search_params(
@@ -245,12 +443,20 @@ def match_meta_to_saved_only(
 ) -> tuple[SimplifyHistoryRecord | None, str]:
     """Return (row, confidence) where confidence is matched|low|none.
 
-    Requires company signal. Role: strong token overlap → matched; when
-    company_ok, allow company + generic engineer subject as low confidence.
+    Employer comes from display-name / subject parse (ATS domains are not
+    employers). Role from parsed_role or subject tokens.
     """
+    if not meta.parsed_employer and not meta.parsed_role:
+        enrich_message_meta(meta)
+
     domain = (meta.sender_domain or "").lower()
     subject = (meta.subject_hint or "").lower()
-    role_hint_tokens = _role_tokens(subject)
+    employer_norm = _normalize_company(meta.parsed_employer)
+    role_source = meta.parsed_role or meta.subject_hint or ""
+    role_hint_tokens = _role_tokens(role_source)
+    # Fall back to full subject tokens when role parse is empty.
+    if not role_hint_tokens:
+        role_hint_tokens = _role_tokens(subject)
     best: tuple[SimplifyHistoryRecord, str, int] | None = None
 
     for row in saved_rows:
@@ -258,17 +464,29 @@ def match_meta_to_saved_only(
             continue
         aliases = _company_aliases(row.company_name)
         company_ok = False
-        if domain:
-            dom_norm = domain.replace(".", "")
+
+        # Primary: parsed employer from display name / subject.
+        if employer_norm:
             for alias in aliases:
-                if alias and (alias in domain or alias in dom_norm):
+                if alias and len(alias) >= 3 and (
+                    alias in employer_norm or employer_norm in alias
+                ):
                     company_ok = True
                     break
-        # Also allow company alias appearing in subject (ATS noreply domains).
+
+        # Secondary: company alias in subject text (ATS noreply domains).
         if not company_ok and subject:
             subj_norm = re.sub(r"[^a-z0-9]+", "", subject)
             for alias in aliases:
                 if alias and len(alias) >= 4 and alias in subj_norm:
+                    company_ok = True
+                    break
+
+        # Tertiary: only trust sender domain when it is NOT a known ATS host.
+        if not company_ok and domain and not _is_ats_domain(domain):
+            dom_norm = domain.replace(".", "")
+            for alias in aliases:
+                if alias and (alias in domain or alias in dom_norm):
                     company_ok = True
                     break
 
@@ -375,6 +593,9 @@ def preview_gmail_matches(
 
             payload = dict(row.payload_json or {})
             evidence = list(payload.get("gmail_match_evidence") or [])
+            # Persist only: message_id, received_at, sender_domain,
+            # matched_company, matched_role (+ confidence). Never bodies /
+            # subjects / display names.
             evidence.append(
                 {
                     "message_id": meta.message_id,
@@ -490,8 +711,8 @@ def fetch_confirmation_messages(
     try:
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
-        from google_auth_oauthlib.flow import InstalledAppFlow  # type: ignore[import-untyped]
-        from googleapiclient.discovery import build  # type: ignore[import-untyped]
+        from google_auth_oauthlib.flow import InstalledAppFlow
+        from googleapiclient.discovery import build
     except ImportError as exc:
         raise RuntimeError(
             "Install google-api-python-client google-auth-httplib2 "
@@ -573,14 +794,16 @@ def fetch_confirmation_messages(
             received = None
             if internal:
                 received = datetime.fromtimestamp(int(internal) / 1000.0, tz=UTC)
-            messages.append(
-                GmailMessageMeta(
-                    message_id=str(item["id"]),
-                    received_at=received,
-                    sender_domain=_sender_domain(headers.get("from")),
-                    subject_hint=(headers.get("subject") or "")[:180],
-                )
+            display, domain = parse_from_header(headers.get("from"))
+            meta = GmailMessageMeta(
+                message_id=str(item["id"]),
+                received_at=received,
+                sender_domain=domain,
+                subject_hint=(headers.get("subject") or "")[:180],
+                sender_display_name=display[:120],
             )
+            enrich_message_meta(meta)
+            messages.append(meta)
         # pageToken paging — list_next sets pageToken on the next request.
         request = (
             service.users()

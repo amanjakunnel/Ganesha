@@ -42,31 +42,15 @@ Default **Recommended** already requires `eligibility == actionable` and fit ban
 
 ## Optional scheduled refresh (opt-in, default off)
 
-Does **not** require an API key. Does **not** submit applications or open browsers. Syncs listings only.
+Prefer the fuller pipeline in **[scheduled-refresh.md](scheduled-refresh.md)**
+(`jobs scheduled-refresh`: sync + score new + enrich ready-to-apply). Examples
+live under `ops/` (launchd plist + cron). Default remains **off**.
 
-### launchd (macOS)
+Legacy SimplifyJobs-only plist still exists at
+`docs/examples/com.ganesha.job-refresh.plist` if you only want sync.
 
-1. Copy the example plist and edit paths:
+Does **not** require an API key. Does **not** submit applications or open browsers.
 
-```bash
-mkdir -p ~/Library/LaunchAgents
-cp docs/examples/com.ganesha.job-refresh.plist \
-  ~/Library/LaunchAgents/com.ganesha.job-refresh.plist
-# Edit ProgramArguments to your repo + venv python
-launchctl load ~/Library/LaunchAgents/com.ganesha.job-refresh.plist
-```
-
-2. Disable:
-
-```bash
-launchctl unload ~/Library/LaunchAgents/com.ganesha.job-refresh.plist
-```
-
-### cron
-
-```cron
-# Every 6 hours while the machine is on
-0 */6 * * * cd /path/to/Ganesha && .venv/bin/python -m apps.cli.main jobs sync-simplifyjobs >> /tmp/ganesha-job-refresh.log 2>&1
-```
-
-Remove the crontab line to disable.
+Dashboard shows a stale notice when the last successful refresh is older than
+`JOB_FEED_STALE_HOURS` (default 24), and a separate notice when the Gmail OAuth
+token is expired/invalid.

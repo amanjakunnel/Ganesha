@@ -172,6 +172,44 @@ def api_jobs(
         raise
 
 
+class NotRelevantBody(BaseModel):
+    also_title_pattern: bool = False
+
+
+@router.post("/api/jobs/{job_id}/not-relevant")
+def api_job_not_relevant(
+    job_id: str,
+    body: NotRelevantBody | None = None,
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    """Mark job Other roles + append ~/.ganesha override. Never deletes."""
+    from packages.core.services.role_relevance_overrides import mark_job_not_relevant
+
+    try:
+        check_database(session)
+        job = (
+            session.query(JobPosting)
+            .filter(JobPosting.id == job_id)
+            .one_or_none()
+        )
+        if job is None:
+            return JSONResponse({"error": "Job not found"}, status_code=404)
+        payload = body or NotRelevantBody()
+        result = mark_job_not_relevant(
+            session, job, also_title_pattern=payload.also_title_pattern
+        )
+        session.commit()
+        return JSONResponse(result)
+    except Exception as exc:
+        session.rollback()
+        if is_database_unavailable(exc):
+            return JSONResponse(
+                {"error": DB_UNAVAILABLE_MESSAGE},
+                status_code=503,
+            )
+        raise
+
+
 @router.get("/api/jobs/{job_id}")
 def api_job_detail(
     job_id: str,

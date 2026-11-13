@@ -34,6 +34,9 @@ def test_slug_variants_and_match() -> None:
         "doordash", "DoorDash"
     )
     assert not _slug_matches_company("stripe", "Databricks")
+    # Short / loose substrings must not create duplicate false matches.
+    assert not _slug_matches_company("ai", "OpenAI")
+    assert not _slug_matches_company("data", "Databricks")
 
 
 def test_extract_ats_from_html() -> None:

@@ -49,6 +49,7 @@
     const refreshBtn = document.getElementById("refresh-jobs");
     const refreshMeta = document.getElementById("refresh-meta");
     const staleNotice = document.getElementById("stale-notice");
+    const gmailTokenNotice = document.getElementById("gmail-token-notice");
     const refreshProgress = document.getElementById("refresh-progress");
     const PREF_KEY = "ganesha.dashboard.filters";
 
@@ -213,10 +214,42 @@
           <td data-label="Location"><span class="location-label">${escapeHtml(job.location)}</span></td>
           <td data-label="Source"><span class="source-badge">${escapeHtml(job.source_label || job.source)}</span></td>
           <td data-label="Recency"><span class="recency-label">${escapeHtml(recencyLabel)}</span> ${escapeHtml(recencyDate)}</td>
-          <td data-label="Details"><a class="btn" href="${escapeHtml(detailHref)}">Open details</a></td>
+          <td data-label="Details">
+            <a class="btn" href="${escapeHtml(detailHref)}">Open details</a>
+            <button type="button" class="btn btn-not-relevant" data-job-id="${escapeHtml(job.id)}">Not relevant</button>
+          </td>
         `;
         jobsBody.appendChild(tr);
       }
+      jobsBody.querySelectorAll(".btn-not-relevant").forEach((btn) => {
+        btn.addEventListener("click", async (ev) => {
+          ev.preventDefault();
+          const id = btn.getAttribute("data-job-id");
+          if (!id) return;
+          btn.disabled = true;
+          try {
+            const res = await fetch(
+              `/api/jobs/${encodeURIComponent(id)}/not-relevant`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ also_title_pattern: false }),
+              }
+            );
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({}));
+              throw new Error(err.error || res.statusText);
+            }
+            await loadJobs();
+          } catch (err) {
+            btn.disabled = false;
+            alert(
+              "Not relevant failed: " +
+                (err && err.message ? err.message : err)
+            );
+          }
+        });
+      });
     }
 
     function renderRefreshPanel(status) {
@@ -239,6 +272,17 @@
           const hours = status.stale_threshold_hours || 24;
           staleNotice.textContent =
             `Feed is older than ${hours} hours. Click Refresh jobs to sync SimplifyJobs.`;
+        }
+      }
+      if (gmailTokenNotice) {
+        const issue =
+          status.gmail_token_issue || status.gmail_needs_attention;
+        const gmail = status.gmail_token || {};
+        gmailTokenNotice.hidden = !issue;
+        if (issue) {
+          gmailTokenNotice.textContent =
+            gmail.message ||
+            "Gmail token expired or invalid. Re-authorize from Likely applied → Gmail preview.";
         }
       }
       const active = status.active;
@@ -482,6 +526,7 @@
     const resumeBtn = document.getElementById("btn-generate-resume");
     const coverBtn = document.getElementById("btn-generate-cover");
     const prepareBtn = document.getElementById("btn-prepare-application");
+    const notRelevantBtn = document.getElementById("btn-not-relevant");
     const coverPlanBtn = document.getElementById("btn-view-cover-plan");
     const coverVoice = document.getElementById("cover-voice");
     const confirmPanel = document.getElementById("confirm-panel");
@@ -535,7 +580,41 @@
       if (resumeBtn) resumeBtn.disabled = busy || !(detailData && detailData.resume_generation && detailData.resume_generation.available);
       if (coverBtn) coverBtn.disabled = busy || !(detailData && detailData.cover_letter_generation && detailData.cover_letter_generation.available);
       if (prepareBtn) prepareBtn.disabled = busy;
+      if (notRelevantBtn) notRelevantBtn.disabled = busy;
       if (confirmGenerate) confirmGenerate.disabled = busy;
+    }
+
+    if (notRelevantBtn) {
+      notRelevantBtn.addEventListener("click", async () => {
+        if (inFlight) return;
+        setBusy(true);
+        setStatus("info", "Marking not relevant…");
+        try {
+          const res = await fetch(
+            `/api/jobs/${encodeURIComponent(jobId)}/not-relevant`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ also_title_pattern: false }),
+            }
+          );
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            throw new Error(data.error || res.statusText);
+          }
+          setStatus(
+            "ok",
+            "Marked Other roles (job kept). Override stored under ~/.ganesha/."
+          );
+        } catch (err) {
+          setStatus(
+            "error",
+            "Not relevant failed: " + (err && err.message ? err.message : err)
+          );
+        } finally {
+          setBusy(false);
+        }
+      });
     }
 
     function formatUnresolved(item) {

@@ -117,17 +117,21 @@ def _slug_matches_company(token: str, company: str) -> bool:
     ck = normalize_company_key(company)
     if not tk or not ck:
         return False
-    if tk == ck or companies_likely_same(tk, ck):
-        return True
-    # Token is often a compacted form of the company key.
     t_compact = re.sub(r"\s+", "", tk)
     c_compact = re.sub(r"\s+", "", ck)
     if t_compact == c_compact:
         return True
-    if len(t_compact) >= 4 and (
-        t_compact in c_compact or c_compact in t_compact
-    ):
-        return True
+    # Do not use companies_likely_same here — it allows any substring and
+    # creates duplicate/wrong board matches ("ai"⊂"openai", "data"⊂"databricks").
+    # Near-equal compact containment only for longer tokens.
+    if len(t_compact) >= 5 and len(c_compact) >= 5:
+        shorter, longer = (
+            (t_compact, c_compact)
+            if len(t_compact) <= len(c_compact)
+            else (c_compact, t_compact)
+        )
+        if shorter in longer and len(shorter) / len(longer) >= 0.7:
+            return True
     return False
 
 

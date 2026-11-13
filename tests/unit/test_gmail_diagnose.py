@@ -15,6 +15,8 @@ from packages.core.services.gmail_application_match import (
     build_search_params,
     diagnose_gmail_preview,
     match_meta_to_saved_only,
+    parse_employer_and_role,
+    parse_from_header,
     preview_gmail_matches,
 )
 
@@ -46,8 +48,11 @@ def test_build_search_params_exposes_paging_and_query() -> None:
     assert "after:" in params.query
     assert "thank you for applying" in DEFAULT_QUERY
     assert "application was received" in DEFAULT_QUERY
+    assert "your application to" in DEFAULT_QUERY
     assert "from:noreply@greenhouse.io" in DEFAULT_QUERY
-    assert params.max_results == 100
+    assert "from:myworkday.com" in DEFAULT_QUERY
+    assert "from:amazon.jobs" in DEFAULT_QUERY
+    assert params.max_results == 200
     assert params.page_token_used is True
     assert params.days == 400
 
@@ -106,10 +111,69 @@ def test_company_plus_generic_engineer_is_low_confidence() -> None:
         received_at=None,
         sender_domain="jobs.acme.com",
         subject_hint="Thanks for applying — Software Engineer",
+        sender_display_name="Acme Technologies",
+        parsed_employer="Acme Technologies",
     )
     matched, conf = match_meta_to_saved_only(meta, [row])
     assert matched is not None
     assert conf == "low"
+
+
+def test_parse_employer_from_display_and_subject() -> None:
+    display, domain = parse_from_header(
+        '"Stripe Careers" <noreply@greenhouse.io>'
+    )
+    assert domain == "greenhouse.io"
+    assert "Stripe" in display
+    employer, role = parse_employer_and_role(
+        subject="Thank you for applying to Stripe",
+        display_name=display,
+    )
+    assert "stripe" in employer.lower()
+
+    employer2, role2 = parse_employer_and_role(
+        subject="Application received - Backend Engineer at Databricks",
+        display_name="",
+    )
+    assert "databricks" in employer2.lower()
+    assert "backend" in role2.lower()
+
+    employer3, _role3 = parse_employer_and_role(
+        subject="Your application to Notion",
+        display_name="",
+    )
+    assert "notion" in employer3.lower()
+
+
+def test_ats_domain_does_not_count_as_employer() -> None:
+    """Greenhouse/Lever domains must not match company aliases via domain alone."""
+    row = _saved_row(company_name="Greenhouse", role_title="Software Engineer")
+    meta = GmailMessageMeta(
+        message_id="m-ats",
+        received_at=None,
+        sender_domain="noreply.greenhouse.io",
+        subject_hint="Thanks for applying",
+        sender_display_name="",
+        parsed_employer="",
+        parsed_role="",
+    )
+    matched, conf = match_meta_to_saved_only(meta, [row])
+    assert conf == "none"
+    assert matched is None
+
+    # Display-name / subject employer wins even when domain is ATS.
+    meta2 = GmailMessageMeta(
+        message_id="m-ats2",
+        received_at=None,
+        sender_domain="noreply.greenhouse.io",
+        subject_hint="Thank you for applying to Acme Technologies — Software Engineer New Grad",
+        sender_display_name="Acme Technologies",
+        parsed_employer="Acme Technologies",
+        parsed_role="Software Engineer New Grad",
+    )
+    matched2, conf2 = match_meta_to_saved_only(meta2, [row := _saved_row()])
+    assert matched2 is not None
+    assert conf2 == "matched"
 
 
 def test_preview_default_persist_false_and_search_fields() -> None:
