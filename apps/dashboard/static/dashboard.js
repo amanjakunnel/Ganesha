@@ -27,9 +27,81 @@
     return `<span class="fit-badge fit-${escapeHtml(label)}">${escapeHtml(label.split("_").join(" "))}${escapeHtml(scoreTxt)}</span>`;
   }
 
+  /** Shared loading status: label + animated ellipsis (respects reduced motion). */
+  const GaneshaLoading = {
+    _reducedMotion() {
+      try {
+        return (
+          window.matchMedia &&
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        );
+      } catch (_err) {
+        return false;
+      }
+    },
+    _setControl(control, disabled) {
+      if (!control) return;
+      if (Array.isArray(control)) {
+        control.forEach((el) => {
+          if (el) el.disabled = disabled;
+        });
+        return;
+      }
+      control.disabled = disabled;
+    },
+    start(el, label, opts) {
+      if (!el) return;
+      const options = opts || {};
+      this._setControl(options.control, true);
+      el.hidden = false;
+      el.classList.add("loading-status", "is-running");
+      el.classList.remove("is-success", "is-error");
+      if (this._reducedMotion()) el.classList.add("reduced-motion");
+      else el.classList.remove("reduced-motion");
+      el.setAttribute("aria-live", "polite");
+      el.setAttribute("aria-busy", "true");
+      const safe = escapeHtml(label || "Working");
+      el.innerHTML = `<span class="loading-label">${safe}</span><span class="loading-ellipsis" aria-hidden="true"></span>`;
+    },
+    update(el, label) {
+      if (!el) return;
+      const labelEl = el.querySelector(".loading-label");
+      if (labelEl) labelEl.textContent = label || "";
+      else this.start(el, label);
+    },
+    succeed(el, message, opts) {
+      if (!el) return;
+      const options = opts || {};
+      this._setControl(options.control, false);
+      el.classList.remove("is-running", "is-error");
+      el.classList.add("is-success");
+      el.removeAttribute("aria-busy");
+      el.textContent = message || "Done.";
+    },
+    fail(el, message, opts) {
+      if (!el) return;
+      const options = opts || {};
+      this._setControl(options.control, false);
+      el.classList.remove("is-running", "is-success");
+      el.classList.add("is-error");
+      el.removeAttribute("aria-busy");
+      el.textContent = message || "Something went wrong.";
+    },
+    clear(el, opts) {
+      if (!el) return;
+      const options = opts || {};
+      this._setControl(options.control, false);
+      el.classList.remove("is-running", "is-success", "is-error", "reduced-motion");
+      el.removeAttribute("aria-busy");
+      el.textContent = "";
+      if (options.hide) el.hidden = true;
+    },
+  };
+  window.GaneshaLoading = GaneshaLoading;
+
   if (config.page === "job_detail") {
     initJobDetail();
-  } else {
+  } else if (config.page === "jobs" || document.getElementById("filters")) {
     initJobsFeed();
   }
 
@@ -243,18 +315,42 @@
       }
       const active = status.active;
       if (refreshProgress) {
+        refreshProgress.classList.add("loading-status");
         if (active && active.status === "running") {
           refreshProgress.hidden = false;
-          refreshProgress.textContent = active.progress || "Refreshing…";
           if (refreshBtn) refreshBtn.disabled = true;
-        } else if (active && (active.status === "completed" || active.status === "failed")) {
+          if (refreshProgress.classList.contains("is-running")) {
+            GaneshaLoading.update(
+              refreshProgress,
+              active.progress || "Refreshing"
+            );
+          } else {
+            GaneshaLoading.start(
+              refreshProgress,
+              active.progress || "Refreshing",
+              { control: refreshBtn }
+            );
+          }
+        } else if (active && active.status === "completed") {
           refreshProgress.hidden = false;
-          refreshProgress.innerHTML = renderSourceResults(active);
           if (refreshBtn) refreshBtn.disabled = false;
+          refreshProgress.classList.remove("is-running", "is-error");
+          refreshProgress.classList.add("is-success");
+          refreshProgress.removeAttribute("aria-busy");
+          refreshProgress.innerHTML = renderSourceResults(active);
+        } else if (active && active.status === "failed") {
+          refreshProgress.hidden = false;
+          if (refreshBtn) refreshBtn.disabled = false;
+          refreshProgress.classList.remove("is-running", "is-success");
+          refreshProgress.classList.add("is-error");
+          refreshProgress.removeAttribute("aria-busy");
+          refreshProgress.innerHTML = renderSourceResults(active);
         } else if (status.last_completed) {
           refreshProgress.hidden = false;
-          refreshProgress.innerHTML = renderSourceResults(status.last_completed);
           if (refreshBtn) refreshBtn.disabled = false;
+          refreshProgress.classList.remove("is-running");
+          refreshProgress.removeAttribute("aria-busy");
+          refreshProgress.innerHTML = renderSourceResults(status.last_completed);
         } else {
           refreshProgress.hidden = true;
           if (refreshBtn) refreshBtn.disabled = false;
@@ -303,10 +399,13 @@
     }
 
     async function triggerRefresh() {
-      if (refreshBtn) refreshBtn.disabled = true;
       if (refreshProgress) {
         refreshProgress.hidden = false;
-        refreshProgress.textContent = "Starting refresh…";
+        GaneshaLoading.start(refreshProgress, "Starting refresh", {
+          control: refreshBtn,
+        });
+      } else if (refreshBtn) {
+        refreshBtn.disabled = true;
       }
       try {
         const response = await fetch("/api/jobs/refresh", { method: "POST" });
@@ -317,19 +416,35 @@
           return;
         }
         if (response.status === 429) {
-          setStatus("error", escapeHtml(data.message || "Refresh rate-limited."));
-          if (refreshBtn) refreshBtn.disabled = false;
+          const msg = data.message || "Refresh rate-limited.";
+          setStatus("error", escapeHtml(msg));
+          if (refreshProgress) {
+            GaneshaLoading.fail(refreshProgress, msg, { control: refreshBtn });
+          } else if (refreshBtn) {
+            refreshBtn.disabled = false;
+          }
           return;
         }
         if (!response.ok && response.status !== 202) {
-          setStatus("error", escapeHtml(data.message || data.error || "Refresh failed."));
-          if (refreshBtn) refreshBtn.disabled = false;
+          const msg = data.message || data.error || "Refresh failed.";
+          setStatus("error", escapeHtml(msg));
+          if (refreshProgress) {
+            GaneshaLoading.fail(refreshProgress, msg, { control: refreshBtn });
+          } else if (refreshBtn) {
+            refreshBtn.disabled = false;
+          }
           return;
         }
         pollRefreshUntilDone();
       } catch (_err) {
         setStatus("error", "Could not start refresh.");
-        if (refreshBtn) refreshBtn.disabled = false;
+        if (refreshProgress) {
+          GaneshaLoading.fail(refreshProgress, "Could not start refresh.", {
+            control: refreshBtn,
+          });
+        } else if (refreshBtn) {
+          refreshBtn.disabled = false;
+        }
       }
     }
 
@@ -735,7 +850,7 @@
       pendingAction = "resume";
       confirmTitle.textContent = "Confirm resume generation";
       confirmGenerate.disabled = true;
-      confirmList.innerHTML = "<li>Loading preview…</li>";
+      confirmList.innerHTML = `<li><span class="loading-status is-running" id="preview-loading">Loading preview<span class="loading-ellipsis" aria-hidden="true"></span></span></li>`;
       confirmPanel.hidden = false;
       resultPanel.hidden = true;
       try {
@@ -801,7 +916,7 @@
       pendingAction = "prepare";
       confirmTitle.textContent = "Prepare application";
       confirmGenerate.disabled = true;
-      confirmList.innerHTML = "<li>Loading preparation preview…</li>";
+      confirmList.innerHTML = `<li><span class="loading-status is-running">Loading preparation preview<span class="loading-ellipsis" aria-hidden="true"></span></span></li>`;
       confirmPanel.hidden = false;
       resultPanel.hidden = true;
       try {
@@ -885,11 +1000,16 @@
     confirmGenerate.addEventListener("click", async () => {
       if (!pendingAction || inFlight) return;
       setBusy(true);
-      if (pendingAction === "prepare") {
-        setStatus("empty", "Preparing application package…");
-      } else {
-        setStatus("empty", pendingAction === "resume" ? "Generating tailored resume…" : "Generating tailored cover letter…");
-      }
+      const busyLabel =
+        pendingAction === "prepare"
+          ? "Preparing application package"
+          : pendingAction === "resume"
+            ? "Generating tailored resume"
+            : "Generating tailored cover letter";
+      GaneshaLoading.start(statusMessage, busyLabel, {
+        control: [resumeBtn, coverBtn, prepareBtn, confirmGenerate],
+      });
+      statusMessage.hidden = false;
       try {
         let response;
         if (pendingAction === "prepare") {
@@ -1001,6 +1121,16 @@
     async function attemptAction(path, successMessage) {
       if (!activeAttemptId || inFlight) return;
       setBusy(true);
+      const runningLabel =
+        path === "/fill-supported"
+          ? "Autofilling supported Greenhouse fields"
+          : path === "/open"
+            ? "Opening application handoff"
+            : "Updating application attempt";
+      GaneshaLoading.start(statusMessage, runningLabel, {
+        control: [btnAppOpen, btnAppFill, btnAppReveal, btnAppSubmitted, btnAppNeeds, btnAppCancel],
+      });
+      statusMessage.hidden = false;
       try {
         const response = await fetch(
           `/api/application-attempts/${encodeURIComponent(activeAttemptId)}${path}`,
@@ -1012,28 +1142,32 @@
         );
         const data = await response.json();
         if (!response.ok) {
-          setStatus("error", escapeHtml(data.error || "Action failed."));
+          GaneshaLoading.fail(
+            statusMessage,
+            data.error || "Action failed.",
+            { control: [btnAppOpen, btnAppFill, btnAppReveal, btnAppSubmitted, btnAppNeeds, btnAppCancel] }
+          );
           return;
         }
         if (data.attempt) renderAttempt(data.attempt);
+        let okMsg = successMessage;
         if (data.instructions) {
-          setStatus(
-            "empty",
-            escapeHtml(successMessage) +
-              " " +
-              escapeHtml((data.instructions || []).slice(0, 1).join(" "))
-          );
-        } else {
-          setStatus("empty", escapeHtml(successMessage));
+          okMsg =
+            successMessage +
+            " " +
+            (data.instructions || []).slice(0, 1).join(" ");
         }
         if (data.simplify_handoff) {
-          setStatus(
-            "empty",
-            "Opened in Chrome. Invoke Simplify yourself if installed, review answers, then confirm submission here. Ganesha did not submit."
-          );
+          okMsg =
+            "Opened in Chrome. Invoke Simplify yourself if installed, review answers, then confirm submission here. Ganesha did not submit.";
         }
+        GaneshaLoading.succeed(statusMessage, okMsg, {
+          control: [btnAppOpen, btnAppFill, btnAppReveal, btnAppSubmitted, btnAppNeeds, btnAppCancel],
+        });
       } catch (_err) {
-        setStatus("error", "Action request failed.");
+        GaneshaLoading.fail(statusMessage, "Action request failed.", {
+          control: [btnAppOpen, btnAppFill, btnAppReveal, btnAppSubmitted, btnAppNeeds, btnAppCancel],
+        });
       } finally {
         setBusy(false);
       }
@@ -1090,7 +1224,8 @@
     if (coverPlanBtn) {
       coverPlanBtn.addEventListener("click", async () => {
         coverPlanPanel.hidden = false;
-        coverPlanBody.innerHTML = "<p>Loading cover-letter plan…</p>";
+        coverPlanBody.innerHTML =
+          `<p class="loading-status is-running">Loading cover-letter plan<span class="loading-ellipsis" aria-hidden="true"></span></p>`;
         try {
           const response = await fetch(
             `/api/jobs/${encodeURIComponent(jobId)}/cover-letter/plan?voice=${encodeURIComponent(selectedVoice())}`
