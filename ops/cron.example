@@ -1,0 +1,8 @@
+# Opt-in Ganesha scheduled refresh (default: do NOT install).
+# Refresh + score new + enrich ready-to-apply. Never opens browsers / submit.
+# Logs land in ~/.ganesha/logs/
+#
+# Every 6 hours while the machine is on:
+# 0 */6 * * * cd /Users/amanjakunnel/Tech/Ganesha && PYTHONPATH=/Users/amanjakunnel/Tech/Ganesha /Users/amanjakunnel/Tech/Ganesha/.venv/bin/python -m apps.cli.main jobs scheduled-refresh >> /Users/amanjakunnel/.ganesha/logs/cron-scheduled-refresh.log 2>&1
+#
+# Remove the crontab line to disable.

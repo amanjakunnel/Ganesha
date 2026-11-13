@@ -95,43 +95,31 @@ Optional Telegram operator console (requires local `.env`; see [docs/telegram-se
    .venv/bin/python -m apps.cli.main telegram doctor
    .venv/bin/python -m apps.cli.main telegram run
 
-Local job dashboard (read-only)
--------------------------------
-Browse every job stored in the local Ganesha database (no duplicate store, no edits):
+Local job dashboard
+-------------------
+Browse jobs in the local Ganesha database (binds to `127.0.0.1` only):
 
 ```bash
-python run_dashboard.py
+export PYTHONPATH=.
+/Users/amanjakunnel/Tech/Ganesha/.venv/bin/python run_dashboard.py
+# or: .venv/bin/python -m apps.cli.main dashboard run
 ```
 
-Open:
+Open `http://127.0.0.1:8000`. Fit views: Recommended, Stretch, Other roles, etc.
 
-```text
-http://127.0.0.1:8000
-```
+Operator loop
+-------------
+1. **Refresh** — dashboard **Refresh jobs** or `jobs sync-simplifyjobs` / opt-in `scripts/ganesha-scheduled-refresh.sh` (default OFF; see [docs/scheduled-refresh.md](docs/scheduled-refresh.md)).
+2. **Role classify** — `jobs classify-role-families --apply --reclassify-all --limit N` (Layer-1). Mark false positives with **Not relevant** on job detail (stores `~/.ganesha/role_not_relevant.json`; job stays under Other roles).
+3. **Score** — `jobs assess-fit-batch` (Layer-2 evidence fit).
+4. **Ready-to-apply** — prepare/open/fill flows live on job detail; final submit stays manual (sibling PR may deepen autofill). Enrich ready candidates via scheduled refresh or `jobs enrich-descriptions`.
+5. **Gmail** — readonly confirmation matching; preview first, persist only after review. See [docs/gmail-readonly-matching.md](docs/gmail-readonly-matching.md). Revoke at Google Account permissions + delete `~/.ganesha/gmail/token.json`.
+6. **Git** — feature branches + PR; never force-push/merge from the agent ([docs/git-workflow.md](docs/git-workflow.md)).
 
-Optional port:
+Feasibility notes (no ingestion): [docs/source-feasibility-workday-amazon.md](docs/source-feasibility-workday-amazon.md).
 
-```bash
-DASHBOARD_PORT=8010 python run_dashboard.py
-```
-
-Also available as:
-
-```bash
-.venv/bin/python -m apps.cli.main dashboard run
-```
-
-JSON API (same filters as the page):
-
-```text
-GET /api/jobs?q=engineer&source=linkedin&sort=date_desc&page=1&page_size=50
-```
-
-- Read-only; binds to `127.0.0.1` only.
-- Shows all imported/synced jobs by default (not just the actionable Telegram queue).
-- If the database is unreachable, run `python -m apps.cli.main db doctor`.
-
-See Makefile and docs/runbook.md for full commands and notes.
+If the database is unreachable, run `python -m apps.cli.main db doctor`.
+See Makefile and docs/runbook.md for full commands.
 
 Database migrations
 -------------------

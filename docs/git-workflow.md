@@ -25,7 +25,15 @@
 
 ```bash
 cd /Users/amanjakunnel/Tech/Ganesha
-.venv/bin/python -m apps.cli.main dashboard run --port 8000
+PYTHONPATH=. .venv/bin/python -m apps.cli.main dashboard run --port 8000
 ```
 
 Stop the process when verification is done; do not leave servers running.
+
+## Related ops docs
+
+- [Runbook / startup](runbook.md)
+- [Job feed refresh](job-feed-refresh.md)
+- [Scheduled refresh](scheduled-refresh.md)
+- [Gmail setup / revoke](gmail-readonly-matching.md)
+- [Workday / Amazon feasibility](source-feasibility-workday-amazon.md) (no ingest)

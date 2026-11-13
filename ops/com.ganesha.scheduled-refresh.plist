@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Opt-in scheduled refresh + score + enrich. DEFAULT: not loaded.
+     Edit paths, then: launchctl load ~/Library/LaunchAgents/com.ganesha.scheduled-refresh.plist
+     Does NOT open browsers, fill forms, or submit applications.
+     Logs: ~/.ganesha/logs/ -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.ganesha.scheduled-refresh</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/amanjakunnel/Tech/Ganesha/.venv/bin/python</string>
+    <string>-m</string>
+    <string>apps.cli.main</string>
+    <string>jobs</string>
+    <string>scheduled-refresh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/amanjakunnel/Tech/Ganesha</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONPATH</key>
+    <string>/Users/amanjakunnel/Tech/Ganesha</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>21600</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/amanjakunnel/.ganesha/logs/launchd-scheduled-refresh.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/amanjakunnel/.ganesha/logs/launchd-scheduled-refresh.err.log</string>
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>

@@ -130,6 +130,9 @@ def get_refresh_status(session: Session | None = None) -> dict[str, Any]:
                 overall_dt = overall_dt.astimezone(UTC)
             age_hours = (datetime.now(UTC) - overall_dt).total_seconds() / 3600.0
             is_stale = age_hours > stale_threshold_hours()
+        from packages.core.services.gmail_application_match import gmail_token_status
+
+        gmail = gmail_token_status()
         payload: dict[str, Any] = {
             "active": active.to_dict() if active else None,
             "last_completed": history_tail.to_dict() if history_tail else None,
@@ -143,6 +146,19 @@ def get_refresh_status(session: Session | None = None) -> dict[str, Any]:
                 active.started_at
                 if active and active.status == "running"
                 else (history_tail.started_at if history_tail else None)
+            ),
+            "gmail_token": gmail,
+            "gmail_token_issue": gmail.get("status") in {
+                "expired",
+                "invalid",
+            },
+            "gmail_needs_attention": gmail.get("status") in {
+                "expired",
+                "invalid",
+            },
+            "notice_needed": bool(
+                is_stale
+                or gmail.get("status") in {"expired", "invalid"}
             ),
         }
         return payload
