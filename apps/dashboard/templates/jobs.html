@@ -10,7 +10,7 @@
   <header class="site-header">
     <div class="header-text">
       <h1>Ganesha Job Dashboard</h1>
-      <p class="subtitle">Local jobs with evidence-based fit bands. Generation lives on each job’s detail page. <a href="/likely-applied">Likely applied</a> · <a href="/answer-bank">Answer bank</a> · <a href="/review-queue">Review queue</a> · <a href="/role-profile">Role profile</a></p>
+      <p class="subtitle">Local jobs with evidence-based fit bands. Generation lives on each job’s detail page. <a href="/ready-to-apply">Ready to apply</a> · <a href="/likely-applied">Likely applied</a> · <a href="/answer-bank">Answer bank</a> · <a href="/review-queue">Review queue</a> · <a href="/role-profile">Role profile</a></p>
     </div>
     <div class="header-actions">
       <p class="result-count" id="result-count" aria-live="polite">Loading…</p>
@@ -22,7 +22,7 @@
     <section class="refresh-panel" id="refresh-panel" aria-live="polite">
       <p class="refresh-meta muted" id="refresh-meta">Checking last refresh…</p>
       <p class="stale-notice" id="stale-notice" hidden>Feed looks stale. Refresh to pull new listings.</p>
-      <div class="refresh-progress" id="refresh-progress" hidden></div>
+      <div class="refresh-progress loading-status" id="refresh-progress" role="status" aria-live="polite" hidden></div>
     </section>
 
     <form id="filters" class="filters" role="search" aria-label="Job filters">
