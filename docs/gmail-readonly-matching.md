@@ -3,9 +3,12 @@
 ## Scope
 
 - OAuth scope: **`gmail.readonly` only**
-- Read confirmation-style messages (thank-you / application-received / thanks-for-your-interest, plus optional Greenhouse/Lever/Ashby noreply `from:` filters)
-- Bounded date range (default covers `saved_only` span, at least 365 days), rate-limited, `maxResults=100` with `pageToken` paging
+- Read confirmation-style messages (thank-you / application-received / your-application-to, plus Greenhouse / Lever / Ashby / Workday / Amazon Jobs `from:` filters)
+- **Employer is not the ATS domain.** Transiently parse company (and role when present) from From display name + Subject (`Thank you for applying to X`, `Your application to X`, `Application received - Role at X`, etc.)
+- Match against `saved_only` by extracted company (+ role tokens when present)
+- Bounded date range (auto-widens to cover `saved_only` span, capped), rate-limited, `maxResults=200` with `pageToken` paging
 - **Never** send, label, draft, or modify mail
+- Preview/diagnose default; persist only after operator review
 
 ## CLI
 
@@ -18,10 +21,26 @@ python -m apps.cli.main jobs gmail-preview --persist
 
 Diagnose/preview print aggregates only (sender-domain histogram, counts). No bodies/subjects.
 
+## Matching note (ATS vs employer)
+
+Confirmation mail often comes from **ATS domains** (Greenhouse, Lever, Ashby,
+Workday, Amazon Jobs), not the employer domain. Ganesha parses the employer
+**transiently** from the sender **display name** and **subject** patterns such as:
+
+- "Thank you for applying to X"
+- "Your application to X"
+- "Application received - Role at X"
+
+Only the match result is stored (below). Display names and subjects are not persisted.
+
 ## What is stored
 
 Only: message ID, received date, sender domain, matched company, matched role, confidence.
-**Not stored:** email bodies, full subjects beyond a transient match hint, attachments, personal content.
+**Not stored:** email bodies, full subjects beyond a transient match hint, display names,
+attachments, personal content.
+
+Dashboard shows a notice when the Gmail token is expired or invalid (re-consent via
+Likely applied → Gmail preview, or revoke + delete `token.json`).
 
 ## Paths (outside the repo)
 
