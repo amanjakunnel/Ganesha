@@ -168,11 +168,69 @@ def is_live_posting(job: JobPosting) -> bool:
     return True
 
 
-def is_previously_or_likely_applied(session: Session, job: JobPosting) -> bool:
+def _preload_applied_indexes(session: Session) -> tuple[set[str], set[str]]:
+    """Load applied job ids and URLs once (avoid O(n×history) per candidate)."""
+    applied_ids: set[str] = set()
+    applied_urls: set[str] = set()
+    try:
+        apps = (
+            session.query(JobApplication)
+            .filter(
+                JobApplication.status.in_(
+                    ["submitted", "interview", "rejected", "withdrawn", "offer"]
+                )
+            )
+            .all()
+        )
+        hist = session.query(SimplifyHistoryRecord).all()
+    except Exception:
+        # Unit tests often pass MagicMock sessions without ORM chaining.
+        return applied_ids, applied_urls
+
+    for app in apps or []:
+        if getattr(app, "job_posting_id", None):
+            applied_ids.add(str(app.job_posting_id))
+
+    for row in hist or []:
+        status = getattr(row, "status_mapped", None)
+        payload = getattr(row, "payload_json", None) or {}
+        likely = isinstance(payload, dict) and payload.get("likely_applied_confirmed")
+        appliedish = bool(
+            status == "applied" or is_at_least(status or "", "applied") or likely
+        )
+        if not appliedish:
+            continue
+        if getattr(row, "job_posting_id", None):
+            applied_ids.add(str(row.job_posting_id))
+        job_url = getattr(row, "job_url", None)
+        if job_url:
+            applied_urls.add(canonical_job_url(job_url) or job_url)
+    return applied_ids, applied_urls
+
+
+def is_previously_or_likely_applied(
+    session: Session,
+    job: JobPosting,
+    *,
+    applied_ids: set[str] | None = None,
+    applied_urls: set[str] | None = None,
+) -> bool:
     """True when history / applications / status say already or likely applied."""
     if (job.status or "").lower() in {"applied_manually", "applied"}:
         return True
 
+    if applied_ids is not None and applied_urls is not None:
+        if str(job.id) in applied_ids:
+            return True
+        for candidate in (
+            canonical_job_url(job.company_apply_url),
+            canonical_job_url(job.canonical_url),
+        ):
+            if candidate and candidate in applied_urls:
+                return True
+        return False
+
+    # Fallback path (tests / single-job checks).
     if previously_applied_for_job(session, job) is not None:
         return True
 
@@ -194,21 +252,6 @@ def is_previously_or_likely_applied(session: Session, job: JobPosting) -> bool:
         .filter(SimplifyHistoryRecord.job_posting_id == job.id)
         .all()
     )
-    urls = {
-        u
-        for u in (
-            canonical_job_url(job.company_apply_url),
-            canonical_job_url(job.canonical_url),
-        )
-        if u
-    }
-    if urls and not rows:
-        rows = (
-            session.query(SimplifyHistoryRecord)
-            .filter(SimplifyHistoryRecord.job_url.in_(list(urls)))
-            .limit(50)
-            .all()
-        )
     for row in rows:
         if is_at_least(row.status_mapped, "applied"):
             return True
@@ -218,7 +261,13 @@ def is_previously_or_likely_applied(session: Session, job: JobPosting) -> bool:
     return False
 
 
-def job_is_otherwise_ready(session: Session, job: JobPosting) -> bool:
+def job_is_otherwise_ready(
+    session: Session,
+    job: JobPosting,
+    *,
+    applied_ids: set[str] | None = None,
+    applied_urls: set[str] | None = None,
+) -> bool:
     """Shared readiness rules excluding Greenhouse-only queue filter."""
     eligibility = resolve_job_eligibility(job)
     if eligibility.result != ELIGIBILITY_ACTIONABLE:
@@ -240,7 +289,9 @@ def job_is_otherwise_ready(session: Session, job: JobPosting) -> bool:
     if not is_live_posting(job):
         return False
 
-    if is_previously_or_likely_applied(session, job):
+    if is_previously_or_likely_applied(
+        session, job, applied_ids=applied_ids, applied_urls=applied_urls
+    ):
         return False
 
     return True
@@ -260,10 +311,13 @@ def list_ready_to_apply(
         .limit(8000)
         .all()
     )
+    applied_ids, applied_urls = _preload_applied_indexes(session)
 
     otherwise: list[tuple[JobPosting, str]] = []
     for job in jobs:
-        if not job_is_otherwise_ready(session, job):
+        if not job_is_otherwise_ready(
+            session, job, applied_ids=applied_ids, applied_urls=applied_urls
+        ):
             continue
         platform = detect_ats_platform(job)
         otherwise.append((job, platform))
