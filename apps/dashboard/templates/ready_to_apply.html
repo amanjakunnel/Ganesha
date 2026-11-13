@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ready to apply — Ganesha</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-text">
+      <h1>Ready to apply</h1>
+      <p class="subtitle">
+        Greenhouse jobs that are actionable, recommended/stretch, verified, live, and not already applied.
+        Prepare opens the existing job detail flow.
+        <a href="/">← Jobs</a>
+        · <a href="/likely-applied">Likely applied</a>
+        · <a href="/role-profile">Role profile</a>
+      </p>
+    </div>
+    <div class="header-actions">
+      <p class="result-count" id="result-count" aria-live="polite">Loading…</p>
+    </div>
+  </header>
+
+  <main>
+    <section class="refresh-panel" id="platform-counts" aria-live="polite">
+      <p class="muted" id="counts-line">Loading platform counts…</p>
+      <p class="stale-notice" id="recommendation" hidden></p>
+    </section>
+    <p id="status-message" class="status-message progress-status" hidden role="status" aria-live="polite"></p>
+
+    <div class="table-wrap">
+      <table class="jobs-table" id="ready-table">
+        <thead>
+          <tr>
+            <th scope="col">Company</th>
+            <th scope="col">Role</th>
+            <th scope="col">Band</th>
+            <th scope="col">Posted</th>
+            <th scope="col">Platform</th>
+            <th scope="col">Prepare</th>
+          </tr>
+        </thead>
+        <tbody id="ready-body">
+          <tr><td colspan="6" class="muted">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+
+  <script src="/static/loading.js"></script>
+  <script>
+    (() => {
+      function escapeHtml(v) {
+        return String(v == null ? "" : v)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+      function formatDate(iso) {
+        if (!iso) return "—";
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return "—";
+        return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+      }
+      async function load() {
+        const status = new ProgressStatus(document.getElementById("status-message"));
+        status.start("Loading ready queue");
+        try {
+          const res = await fetch("/api/ready-to-apply");
+          const data = await res.json();
+          if (!res.ok) {
+            status.setError(data.error || "Failed to load.");
+            return;
+          }
+          const counts = data.counts_by_platform || {};
+          const bits = Object.keys(counts)
+            .sort()
+            .map((k) => `${escapeHtml(k)}: ${counts[k]}`);
+          document.getElementById("counts-line").innerHTML =
+            `Otherwise-ready by platform — ${bits.join(" · ") || "none"}` +
+            ` · Greenhouse queue: <strong>${data.greenhouse_ready || 0}</strong>` +
+            ` · total otherwise-ready: ${data.total_otherwise_ready || 0}`;
+          const rec = document.getElementById("recommendation");
+          if (data.recommendation) {
+            rec.hidden = false;
+            rec.textContent = data.recommendation;
+          } else {
+            rec.hidden = true;
+          }
+          document.getElementById("result-count").textContent =
+            `${(data.jobs || []).length} Greenhouse ready`;
+          const body = document.getElementById("ready-body");
+          if (!(data.jobs || []).length) {
+            body.innerHTML = '<tr><td colspan="6" class="muted">No Greenhouse ready-to-apply jobs.</td></tr>';
+          } else {
+            body.innerHTML = data.jobs.map((j) => `
+              <tr>
+                <td data-label="Company">${escapeHtml(j.company)}</td>
+                <td data-label="Role">${escapeHtml(j.role)}</td>
+                <td data-label="Band"><span class="fit-badge fit-${escapeHtml(j.band)}">${escapeHtml(j.band)}</span></td>
+                <td data-label="Posted">${escapeHtml(formatDate(j.posted_at))}</td>
+                <td data-label="Platform">${escapeHtml(j.platform)}</td>
+                <td data-label="Prepare"><a class="btn" href="${escapeHtml(j.prepare_path || `/jobs/${j.id}`)}">Prepare</a></td>
+              </tr>
+            `).join("");
+          }
+          status.setDone("Ready queue loaded.");
+        } catch (err) {
+          status.setError("Could not load ready-to-apply queue.");
+        }
+      }
+      load();
+    })();
+  </script>
+</body>
+</html>

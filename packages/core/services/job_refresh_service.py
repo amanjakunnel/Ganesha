@@ -66,6 +66,8 @@ class RefreshJobState:
     progress: str = ""
     sources: list[SourceRefreshResult] = field(default_factory=list)
     fit_assessed: int = 0
+    scored: int = 0
+    scoring_progress: str | None = None
     message: str | None = None
     overall_last_refreshed: str | None = None
 
@@ -78,6 +80,8 @@ class RefreshJobState:
             "progress": self.progress,
             "sources": [asdict(s) for s in self.sources],
             "fit_assessed": self.fit_assessed,
+            "scored": self.scored,
+            "scoring_progress": self.scoring_progress,
             "message": self.message,
             "overall_last_refreshed": self.overall_last_refreshed,
         }
@@ -266,18 +270,29 @@ def _run_refresh(refresh_id: str) -> None:
             if time.monotonic() - started > timeout:
                 raise TimeoutError("Refresh exceeded timeout before company board sync")
 
+            board_limit = 25
+            board_attempted = {"n": 0}
+
             def _on_board_progress(info: dict[str, Any]) -> None:
                 if time.monotonic() - started > timeout:
                     raise TimeoutError(
                         "Refresh exceeded timeout during company board sync"
                     )
+                board_attempted["n"] += 1
                 company = info.get("company") or "?"
                 platform = info.get("platform") or "?"
                 status = info.get("status") or "…"
                 fetched = int(info.get("fetched") or 0)
+                idx = board_attempted["n"]
+                label = (
+                    "Greenhouse boards"
+                    if platform == "greenhouse"
+                    else f"{platform.capitalize()} boards"
+                )
                 _set_progress(
                     state,
-                    f"Board {platform}/{company}: {status} ({fetched} jobs)…",
+                    f"{label} {idx}/{board_limit} · {company}: {status}"
+                    f" ({fetched} jobs)…",
                 )
 
             board_timeout = float(
@@ -288,7 +303,7 @@ def _run_refresh(refresh_id: str) -> None:
             board_result = sync_company_boards(
                 session,
                 dry_run=False,
-                limit=25,
+                limit=board_limit,
                 board_timeout_seconds=board_timeout,
                 on_board_progress=_on_board_progress,
             )
@@ -325,11 +340,25 @@ def _run_refresh(refresh_id: str) -> None:
         session.commit()
 
         fit_n = 0
+        scored_n = 0
         if created_ids:
-            _set_progress(state, f"Assessing fit for {len(created_ids)} new job(s)…")
-            fit_n = _assess_new_jobs(session, created_ids)
+            _set_progress(
+                state,
+                f"Classifying role profile for {len(created_ids)} new job(s)…",
+            )
+            fit_n = _classify_and_score_new_jobs(
+                session,
+                created_ids,
+                state=state,
+                score_limit=500,
+            )
+            scored_n = fit_n
             session.commit()
         state.fit_assessed = fit_n
+        state.scored = scored_n
+        state.scoring_progress = (
+            f"Scored {scored_n} new job(s)" if scored_n else None
+        )
 
         failed = sj.status == "failed" or cb.status == "failed"
         state.status = "failed" if failed else "completed"
@@ -350,6 +379,7 @@ def _run_refresh(refresh_id: str) -> None:
                 "status": state.status,
                 "sources": [asdict(s) for s in state.sources],
                 "fit_assessed": fit_n,
+                "scored": scored_n,
             },
         )
         session.commit()
@@ -475,10 +505,41 @@ def _backfill_first_seen(session: Session) -> int:
 
 
 def _assess_new_jobs(session: Session, job_ids: list[str]) -> int:
-    from packages.core.services.evidence_fit_service import assess_and_store
+    """Backward-compatible wrapper: classify + score new ids (unbounded)."""
+    return _classify_and_score_new_jobs(session, job_ids, state=None, score_limit=None)
 
-    n = 0
-    for jid in job_ids:
+
+def _classify_and_score_new_jobs(
+    session: Session,
+    job_ids: list[str],
+    *,
+    state: RefreshJobState | None,
+    score_limit: int | None = 500,
+) -> int:
+    """Classify role_profile for new jobs, then score unmatched-unscored (bounded)."""
+    from packages.core.services.evidence_fit_service import (
+        assess_and_store,
+        get_stored_fit,
+    )
+    from packages.core.services.role_profile import (
+        STATUS_MISMATCH,
+        classify_and_store,
+        get_stored_role_block,
+        load_role_profile,
+    )
+
+    profile = load_role_profile(session, refresh=False)
+    unique_ids = list(dict.fromkeys(job_ids))
+    scored = 0
+    total = len(unique_ids)
+
+    if state is not None:
+        _set_progress(state, "Scoring jobs…")
+        state.scoring_progress = "Scoring jobs…"
+
+    for idx, jid in enumerate(unique_ids, start=1):
+        if score_limit is not None and scored >= score_limit:
+            break
         job = session.query(JobPosting).filter(JobPosting.id == jid).one_or_none()
         if job is None:
             continue
@@ -486,11 +547,28 @@ def _assess_new_jobs(session: Session, job_ids: list[str]) -> int:
         if eligibility.get("result") == ELIGIBILITY_EXCLUDED:
             continue
         try:
+            block = get_stored_role_block(job)
+            if not block or block.get("status") not in {"matched", STATUS_MISMATCH}:
+                classify_and_store(session, job, profile)
+                block = get_stored_role_block(job) or {}
+            if block.get("status") == STATUS_MISMATCH:
+                continue
+            if get_stored_fit(job):
+                continue
             assess_and_store(session, job)
-            n += 1
+            scored += 1
+            if state is not None and scored % 10 == 0:
+                msg = f"Scoring jobs… {scored}/{min(total, score_limit or total)}"
+                _set_progress(state, msg)
+                state.scoring_progress = msg
         except Exception:
             continue
-    return n
+
+    if state is not None:
+        msg = f"Scoring jobs… done ({scored})"
+        _set_progress(state, msg)
+        state.scoring_progress = msg
+    return scored
 
 
 def reset_refresh_state_for_tests() -> None:

@@ -27,6 +27,11 @@ from packages.core.services.job_refresh_service import (
     get_refresh_status,
     start_refresh,
 )
+from packages.core.services.job_score_service import (
+    get_score_status,
+    start_score_remaining,
+)
+from packages.core.services.ready_to_apply import list_ready_to_apply
 from apps.cover_letter_generation.services.cover_letter_preflight_service import (
     cover_letter_preflight,
 )
@@ -137,6 +142,47 @@ def api_jobs_refresh(
         raise
     state, code = start_refresh()
     return JSONResponse(state.to_dict(), status_code=code)
+
+
+@router.get("/api/jobs/score/status")
+def api_jobs_score_status() -> JSONResponse:
+    return JSONResponse(get_score_status())
+
+
+@router.post("/api/jobs/score")
+def api_jobs_score_start(
+    session: Session = Depends(get_session),
+    batch_size: int = Query(default=200, ge=1, le=500),
+) -> JSONResponse:
+    """Optional: start background score-remaining (does not run on page load)."""
+    try:
+        check_database(session)
+    except Exception as exc:
+        if is_database_unavailable(exc):
+            return JSONResponse(
+                {"error": DB_UNAVAILABLE_MESSAGE},
+                status_code=503,
+            )
+        raise
+    state, code = start_score_remaining(batch_size=batch_size)
+    return JSONResponse(state.to_dict(), status_code=code)
+
+
+@router.get("/api/ready-to-apply")
+def api_ready_to_apply(
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    try:
+        check_database(session)
+        payload = list_ready_to_apply(session)
+        return JSONResponse(payload.to_dict())
+    except Exception as exc:
+        if is_database_unavailable(exc):
+            return JSONResponse(
+                {"error": DB_UNAVAILABLE_MESSAGE},
+                status_code=503,
+            )
+        raise
 
 
 @router.get("/health")
@@ -851,6 +897,15 @@ def likely_applied_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "likely_applied.html",
+        {"db_unavailable_message": DB_UNAVAILABLE_MESSAGE},
+    )
+
+
+@router.get("/ready-to-apply", response_class=HTMLResponse)
+def ready_to_apply_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "ready_to_apply.html",
         {"db_unavailable_message": DB_UNAVAILABLE_MESSAGE},
     )
 

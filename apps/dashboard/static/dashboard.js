@@ -50,6 +50,16 @@
     const refreshMeta = document.getElementById("refresh-meta");
     const staleNotice = document.getElementById("stale-notice");
     const refreshProgress = document.getElementById("refresh-progress");
+    const refreshStatusLabel = document.getElementById("refresh-status-label");
+    const scoreProgressEl = document.getElementById("score-progress");
+    const refreshStatusUi =
+      typeof ProgressStatus !== "undefined"
+        ? new ProgressStatus(refreshStatusLabel, { control: refreshBtn })
+        : null;
+    const scoreStatusUi =
+      typeof ProgressStatus !== "undefined"
+        ? new ProgressStatus(scoreProgressEl)
+        : null;
     const PREF_KEY = "ganesha.dashboard.filters";
 
     const fields = ["fit", "recency", "q", "source", "location", "sort"];
@@ -242,23 +252,68 @@
         }
       }
       const active = status.active;
-      if (refreshProgress) {
-        if (active && active.status === "running") {
-          refreshProgress.hidden = false;
-          refreshProgress.textContent = active.progress || "Refreshing…";
-          if (refreshBtn) refreshBtn.disabled = true;
-        } else if (active && (active.status === "completed" || active.status === "failed")) {
+      if (active && active.status === "running") {
+        const label =
+          active.scoring_progress ||
+          active.progress ||
+          "Refreshing";
+        if (refreshStatusUi) {
+          if (!refreshStatusUi.running) refreshStatusUi.start(label);
+          else refreshStatusUi.update(label);
+        } else if (refreshStatusLabel) {
+          refreshStatusLabel.hidden = false;
+          refreshStatusLabel.textContent = `${label}…`;
+        }
+        if (refreshProgress) refreshProgress.hidden = true;
+        if (refreshBtn) refreshBtn.disabled = true;
+      } else if (active && (active.status === "completed" || active.status === "failed")) {
+        if (refreshStatusUi) {
+          if (active.status === "failed") {
+            refreshStatusUi.setError(active.message || "Refresh failed.");
+          } else {
+            refreshStatusUi.setDone(active.message || "Refresh complete.");
+          }
+        }
+        if (refreshProgress) {
           refreshProgress.hidden = false;
           refreshProgress.innerHTML = renderSourceResults(active);
-          if (refreshBtn) refreshBtn.disabled = false;
-        } else if (status.last_completed) {
+        }
+        if (refreshBtn) refreshBtn.disabled = false;
+      } else if (status.last_completed) {
+        if (refreshProgress) {
           refreshProgress.hidden = false;
           refreshProgress.innerHTML = renderSourceResults(status.last_completed);
-          if (refreshBtn) refreshBtn.disabled = false;
-        } else {
-          refreshProgress.hidden = true;
-          if (refreshBtn) refreshBtn.disabled = false;
         }
+        if (refreshBtn) refreshBtn.disabled = false;
+      } else {
+        if (refreshProgress) refreshProgress.hidden = true;
+        if (refreshBtn) refreshBtn.disabled = false;
+      }
+    }
+
+    async function loadScoreStatus() {
+      try {
+        const response = await fetch("/api/jobs/score/status");
+        if (!response.ok) return null;
+        const data = await response.json();
+        const active = data.active;
+        if (active && active.status === "running") {
+          const label = active.progress || "Scoring jobs";
+          if (scoreStatusUi) {
+            if (!scoreStatusUi.running) scoreStatusUi.start(label);
+            else scoreStatusUi.update(label);
+          } else if (scoreProgressEl) {
+            scoreProgressEl.hidden = false;
+            scoreProgressEl.textContent = `${label}…`;
+          }
+        } else if (active && active.status === "completed") {
+          if (scoreStatusUi) scoreStatusUi.setDone(active.message || "Scoring complete.");
+        } else if (active && active.status === "failed") {
+          if (scoreStatusUi) scoreStatusUi.setError(active.message || "Scoring failed.");
+        }
+        return data;
+      } catch (_err) {
+        return null;
       }
     }
 
@@ -295,6 +350,7 @@
     async function pollRefreshUntilDone() {
       clearTimeout(refreshPollTimer);
       const data = await loadRefreshStatus();
+      await loadScoreStatus();
       if (data && data.active && data.active.status === "running") {
         refreshPollTimer = setTimeout(pollRefreshUntilDone, 1500);
         return;
@@ -303,10 +359,13 @@
     }
 
     async function triggerRefresh() {
-      if (refreshBtn) refreshBtn.disabled = true;
-      if (refreshProgress) {
-        refreshProgress.hidden = false;
-        refreshProgress.textContent = "Starting refresh…";
+      if (refreshStatusUi) refreshStatusUi.start("Starting refresh");
+      else if (refreshBtn) {
+        refreshBtn.disabled = true;
+        if (refreshStatusLabel) {
+          refreshStatusLabel.hidden = false;
+          refreshStatusLabel.textContent = "Starting refresh…";
+        }
       }
       try {
         const response = await fetch("/api/jobs/refresh", { method: "POST" });
@@ -318,18 +377,21 @@
         }
         if (response.status === 429) {
           setStatus("error", escapeHtml(data.message || "Refresh rate-limited."));
-          if (refreshBtn) refreshBtn.disabled = false;
+          if (refreshStatusUi) refreshStatusUi.setError(data.message || "Refresh rate-limited.");
+          else if (refreshBtn) refreshBtn.disabled = false;
           return;
         }
         if (!response.ok && response.status !== 202) {
           setStatus("error", escapeHtml(data.message || data.error || "Refresh failed."));
-          if (refreshBtn) refreshBtn.disabled = false;
+          if (refreshStatusUi) refreshStatusUi.setError(data.message || data.error || "Refresh failed.");
+          else if (refreshBtn) refreshBtn.disabled = false;
           return;
         }
         pollRefreshUntilDone();
       } catch (_err) {
         setStatus("error", "Could not start refresh.");
-        if (refreshBtn) refreshBtn.disabled = false;
+        if (refreshStatusUi) refreshStatusUi.setError("Could not start refresh.");
+        else if (refreshBtn) refreshBtn.disabled = false;
       }
     }
 
@@ -473,12 +535,18 @@
       }
     }
     applyParamsToForm(urlParams);
+    loadRefreshStatus();
+    loadScoreStatus();
     loadJobs();
   }
 
   function initJobDetail() {
     const jobId = config.jobId;
     const statusMessage = document.getElementById("status-message");
+    const detailProgress =
+      typeof ProgressStatus !== "undefined"
+        ? new ProgressStatus(statusMessage)
+        : null;
     const resumeBtn = document.getElementById("btn-generate-resume");
     const coverBtn = document.getElementById("btn-generate-cover");
     const prepareBtn = document.getElementById("btn-prepare-application");
@@ -885,7 +953,18 @@
     confirmGenerate.addEventListener("click", async () => {
       if (!pendingAction || inFlight) return;
       setBusy(true);
-      if (pendingAction === "prepare") {
+      const runningLabel =
+        pendingAction === "prepare"
+          ? "Preparing application package"
+          : pendingAction === "resume"
+            ? "Generating tailored resume"
+            : "Generating tailored cover letter";
+      if (detailProgress) {
+        detailProgress.start(runningLabel);
+        if (detailProgress.control !== confirmGenerate) {
+          confirmGenerate.disabled = true;
+        }
+      } else if (pendingAction === "prepare") {
         setStatus("empty", "Preparing application package…");
       } else {
         setStatus("empty", pendingAction === "resume" ? "Generating tailored resume…" : "Generating tailored cover letter…");
@@ -943,10 +1022,12 @@
         confirmGenerate.textContent = "Generate";
         if (pendingAction === "prepare") {
           if (data.status === "prepared" && data.attempt) {
-            setStatus("empty", "Application package prepared.");
+            if (detailProgress) detailProgress.setDone("Application package prepared.");
+            else setStatus("empty", "Application package prepared.");
             renderAttempt(data.attempt);
           } else {
-            setStatus("error", escapeHtml(data.error || "Preparation failed."));
+            if (detailProgress) detailProgress.setError(data.error || "Preparation failed.");
+            else setStatus("error", escapeHtml(data.error || "Preparation failed."));
             if (applicationPanel) {
               applicationPanel.hidden = false;
               applicationBody.innerHTML = `<p>${escapeHtml(data.error || "Preparation failed.")}</p>`;
@@ -955,7 +1036,13 @@
         } else {
           resultPanel.hidden = false;
           if (data.status === "succeeded") {
-            setStatus(
+            if (detailProgress) {
+              detailProgress.setDone(
+                pendingAction === "resume"
+                  ? "Resume generated successfully."
+                  : "Cover letter generated."
+              );
+            } else setStatus(
               "empty",
               pendingAction === "resume"
                 ? "Resume generated successfully."
@@ -986,12 +1073,14 @@
               `;
             }
           } else {
-            setStatus("error", escapeHtml(data.error || "Generation failed."));
+            if (detailProgress) detailProgress.setError(data.error || "Generation failed.");
+            else setStatus("error", escapeHtml(data.error || "Generation failed."));
             resultBody.innerHTML = `<p>${escapeHtml(data.error || "Generation failed.")}</p>`;
           }
         }
       } catch (_err) {
-        setStatus("error", "Request failed.");
+        if (detailProgress) detailProgress.setError("Request failed.");
+        else setStatus("error", "Request failed.");
       } finally {
         pendingAction = null;
         setBusy(false);
@@ -1001,6 +1090,7 @@
     async function attemptAction(path, successMessage) {
       if (!activeAttemptId || inFlight) return;
       setBusy(true);
+      if (detailProgress) detailProgress.start("Running autofill / application action");
       try {
         const response = await fetch(
           `/api/application-attempts/${encodeURIComponent(activeAttemptId)}${path}`,
@@ -1012,11 +1102,16 @@
         );
         const data = await response.json();
         if (!response.ok) {
-          setStatus("error", escapeHtml(data.error || "Action failed."));
+          if (detailProgress) detailProgress.setError(data.error || "Action failed.");
+          else setStatus("error", escapeHtml(data.error || "Action failed."));
           return;
         }
         if (data.attempt) renderAttempt(data.attempt);
-        if (data.instructions) {
+        const doneMsg = data.instructions
+          ? `${successMessage} ${(data.instructions || []).slice(0, 1).join(" ")}`
+          : successMessage;
+        if (detailProgress) detailProgress.setDone(doneMsg);
+        else if (data.instructions) {
           setStatus(
             "empty",
             escapeHtml(successMessage) +
