@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ready to apply — Ganesha</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-text">
+      <h1>Ready to apply</h1>
+      <p class="subtitle">
+        Eligible recommended/stretch jobs with verified descriptions, live postings,
+        and no prior/likely-applied hit. Greenhouse prepare only — nothing auto-fills or submits.
+        <a href="/">← Jobs</a>
+      </p>
+    </div>
+  </header>
+  <main>
+    <p id="summary" class="muted" aria-live="polite">Loading</p>
+    <p id="platform-counts" class="muted" style="font-size:0.85rem"></p>
+    <p id="adapter-note" class="muted" style="font-size:0.85rem"></p>
+    <div class="filter-actions" style="margin-bottom:1rem">
+      <button type="button" class="btn" id="reload">Reload</button>
+    </div>
+    <p id="action-status" class="loading-status" role="status" aria-live="polite"></p>
+
+    <div class="table-wrap">
+      <table class="jobs-table" id="ready-table">
+        <thead>
+          <tr>
+            <th scope="col">Company</th>
+            <th scope="col">Role</th>
+            <th scope="col">Band</th>
+            <th scope="col">Posted</th>
+            <th scope="col">Platform</th>
+            <th scope="col">Prepare</th>
+          </tr>
+        </thead>
+        <tbody id="ready-rows"></tbody>
+      </table>
+    </div>
+  </main>
+  <script src="/static/dashboard.js"></script>
+  <script>
+    (function () {
+      const summary = document.getElementById("summary");
+      const platformCounts = document.getElementById("platform-counts");
+      const adapterNote = document.getElementById("adapter-note");
+      const rows = document.getElementById("ready-rows");
+      const reloadBtn = document.getElementById("reload");
+      const statusEl = document.getElementById("action-status");
+
+      function escapeHtml(v) {
+        return String(v == null ? "" : v)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+
+      function formatDate(iso) {
+        if (!iso) return "—";
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return "—";
+        return d.toLocaleDateString(undefined, {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+        });
+      }
+
+      async function load() {
+        const loading = window.GaneshaLoading;
+        if (loading) {
+          loading.start(statusEl, "Loading ready queue", { control: reloadBtn });
+        } else {
+          statusEl.textContent = "Loading…";
+          reloadBtn.disabled = true;
+        }
+        try {
+          const res = await fetch("/api/ready-to-apply");
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.error || "Failed to load");
+          }
+          summary.textContent = `${data.count || 0} Greenhouse-ready job(s)`;
+          const counts = data.platform_counts || {};
+          platformCounts.textContent =
+            "Otherwise-ready by platform: " +
+            Object.keys(counts)
+              .map((k) => `${k}=${counts[k]}`)
+              .join(" · ");
+          adapterNote.textContent = data.adapter_note || "";
+          rows.innerHTML = "";
+          for (const item of data.items || []) {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+              <td data-label="Company">${escapeHtml(item.company)}</td>
+              <td data-label="Role">${escapeHtml(item.role)}</td>
+              <td data-label="Band"><span class="fit-badge fit-${escapeHtml(item.band)}">${escapeHtml(item.band)}</span></td>
+              <td data-label="Posted">${escapeHtml(formatDate(item.posted_at))}</td>
+              <td data-label="Platform">${escapeHtml(item.platform)}</td>
+              <td data-label="Prepare"><a class="btn primary" href="${escapeHtml(item.detail_href)}">Prepare</a></td>
+            `;
+            rows.appendChild(tr);
+          }
+          if (loading) {
+            loading.succeed(statusEl, "Ready queue loaded.", { control: reloadBtn });
+          } else {
+            statusEl.textContent = "";
+            reloadBtn.disabled = false;
+          }
+        } catch (err) {
+          const msg = err && err.message ? err.message : "Load failed";
+          summary.textContent = "Could not load ready-to-apply queue.";
+          if (loading) {
+            loading.fail(statusEl, msg, { control: reloadBtn });
+          } else {
+            statusEl.textContent = msg;
+            reloadBtn.disabled = false;
+          }
+        }
+      }
+
+      reloadBtn.addEventListener("click", () => load());
+      load();
+    })();
+  </script>
+</body>
+</html>

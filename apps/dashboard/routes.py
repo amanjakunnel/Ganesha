@@ -855,6 +855,30 @@ def likely_applied_page(request: Request) -> HTMLResponse:
     )
 
 
+@router.get("/api/ready-to-apply")
+def api_ready_to_apply(
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    from packages.core.services.ready_to_apply import ready_to_apply_snapshot
+
+    try:
+        check_database(session)
+        return JSONResponse(ready_to_apply_snapshot(session))
+    except Exception as exc:
+        if is_database_unavailable(exc):
+            return JSONResponse({"error": DB_UNAVAILABLE_MESSAGE}, status_code=503)
+        raise
+
+
+@router.get("/ready-to-apply", response_class=HTMLResponse)
+def ready_to_apply_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "ready_to_apply.html",
+        {"db_unavailable_message": DB_UNAVAILABLE_MESSAGE},
+    )
+
+
 class AnswerBankBody(BaseModel):
     question_pattern: str
     answer: str
