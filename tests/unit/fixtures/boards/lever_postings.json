@@ -2,6 +2,7 @@
   {
     "id": "lever-job-1",
     "text": "Backend Engineer",
+    "createdAt": 1704067200000,
     "categories": {
       "location": "Seattle, WA",
       "commitment": "Full-time",
@@ -19,6 +20,7 @@
   {
     "id": "lever-job-2",
     "text": "Product Designer",
+    "createdAt": 1735689600000,
     "categories": {
       "location": "New York, NY",
       "commitment": "Full-time",

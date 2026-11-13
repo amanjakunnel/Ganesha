@@ -126,11 +126,30 @@ def parse_jobs(
                 company_apply_url=apply_url or job_url,
                 workplace_type=str(workplace) if workplace else None,
                 employment_type=str(employment) if employment else None,
-                posted_at=raw.get("publishedAt"),
+                posted_at=_posted_at_from_raw(raw),
                 raw_payload={"jobUrl": job_url},
             )
         )
     return out
+
+
+def _posted_at_from_raw(raw: dict[str, Any]) -> str | None:
+    """Ashby ``publishedAt`` is an ISO-8601 timestamp when present."""
+    published = raw.get("publishedAt")
+    if published is None:
+        return None
+    if isinstance(published, (int, float)):
+        # Rare: treat large numbers as ms epoch for robustness.
+        from datetime import UTC, datetime
+
+        ms = float(published)
+        seconds = ms / 1000.0 if ms >= 1e11 else ms
+        try:
+            return datetime.fromtimestamp(seconds, tz=UTC).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return None
+    text = str(published).strip()
+    return text or None
 
 
 def fetch_board(

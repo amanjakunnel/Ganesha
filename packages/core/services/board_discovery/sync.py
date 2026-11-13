@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Callable
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from packages.core.domain.models import AuditEvent, JobPosting
 from packages.core.services.board_discovery import ashby, greenhouse, lever
@@ -15,6 +17,7 @@ from packages.core.services.board_discovery.company_resolution import (
 )
 from packages.core.services.board_discovery.http_client import BoardHttpClient
 from packages.core.services.board_discovery.types import (
+    DEFAULT_BOARD_TIMEOUT_SECONDS,
     PLATFORM_ASHBY,
     PLATFORM_GREENHOUSE,
     PLATFORM_LEVER,
@@ -29,11 +32,12 @@ from packages.core.services.job_eligibility import (
     attach_eligibility_to_metadata,
     classify_job_eligibility,
 )
-from packages.core.services.job_intake import upsert_job_from_import
+from packages.core.services.job_intake import _parse_date, upsert_job_from_import
 from packages.core.services.source_registry import record_source_sync
 from packages.core.settings import settings
 
 FetchFn = Callable[..., BoardFetchResult]
+BoardProgressCallback = Callable[[dict[str, Any]], None]
 
 
 @dataclass
@@ -73,6 +77,35 @@ class CompanyBoardSyncResult:
         }
 
 
+@dataclass
+class BoardDatesBackfillResult:
+    dry_run: bool = True
+    companies_checked: int = 0
+    boards_attempted: int = 0
+    boards_ok: int = 0
+    jobs_seen: int = 0
+    posted_at_set: int = 0
+    already_had_posted_at: int = 0
+    no_source_date: int = 0
+    missing_local: int = 0
+    errors: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+    def to_summary(self) -> dict[str, Any]:
+        return {
+            "dry_run": self.dry_run,
+            "companies_checked": self.companies_checked,
+            "boards_attempted": self.boards_attempted,
+            "boards_ok": self.boards_ok,
+            "jobs_seen": self.jobs_seen,
+            "posted_at_set": self.posted_at_set,
+            "already_had_posted_at": self.already_had_posted_at,
+            "no_source_date": self.no_source_date,
+            "missing_local": self.missing_local,
+            "errors": len(self.errors),
+        }
+
+
 _FETCHERS: dict[str, FetchFn] = {
     PLATFORM_GREENHOUSE: greenhouse.fetch_board,
     PLATFORM_LEVER: lever.fetch_board,
@@ -85,6 +118,19 @@ def _max_companies(limit: int | None) -> int:
         return max(0, limit)
     return int(
         getattr(settings, "company_board_discovery_max_companies", 25) or 25
+    )
+
+
+def _board_timeout(board_timeout_seconds: float | None) -> float:
+    if board_timeout_seconds is not None:
+        return max(0.01, float(board_timeout_seconds))
+    return float(
+        getattr(
+            settings,
+            "company_board_fetch_timeout_seconds",
+            DEFAULT_BOARD_TIMEOUT_SECONDS,
+        )
+        or DEFAULT_BOARD_TIMEOUT_SECONDS
     )
 
 
@@ -105,6 +151,48 @@ def _load_prior_etags(session: Session) -> dict[str, str]:
     if not isinstance(etags, dict):
         return {}
     return {str(k): str(v) for k, v in etags.items() if v}
+
+
+def _emit_board_progress(
+    on_board_progress: BoardProgressCallback | None,
+    *,
+    board: BoardRef,
+    status: str,
+    fetched: int = 0,
+    error: str | None = None,
+) -> None:
+    if on_board_progress is None:
+        return
+    payload: dict[str, Any] = {
+        "company": board.company,
+        "platform": board.platform,
+        "board_token": board.board_token,
+        "status": status,
+        "fetched": fetched,
+    }
+    if error:
+        payload["error"] = error
+    on_board_progress(payload)
+
+
+def _fetch_board_with_timeout(
+    fetcher: FetchFn,
+    client: BoardHttpClient,
+    board: BoardRef,
+    *,
+    etag: str | None,
+    timeout_seconds: float,
+) -> BoardFetchResult:
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(fetcher, client, board, etag=etag)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except FuturesTimeoutError:
+            return BoardFetchResult(
+                board=board,
+                ok=False,
+                error=f"board_timeout:{int(timeout_seconds)}s",
+            )
 
 
 def board_job_to_import_dict(
@@ -163,8 +251,6 @@ def mark_missing_board_jobs_closed(
     closed = 0
     prefix = f"{board.platform}|{board.board_token}|"
     # Prefix filter + load_only: never pull description_text blobs just to close rows.
-    from sqlalchemy.orm import load_only
-
     jobs = (
         session.query(JobPosting)
         .options(
@@ -224,10 +310,13 @@ def sync_company_boards(
     csv_text: str | None = None,
     client: BoardHttpClient | None = None,
     prior_etags: dict[str, str] | None = None,
+    board_timeout_seconds: float | None = None,
+    on_board_progress: BoardProgressCallback | None = None,
 ) -> CompanyBoardSyncResult:
     result = CompanyBoardSyncResult(dry_run=dry_run)
     max_companies = _max_companies(limit)
     synced_at = datetime.now(UTC)
+    timeout_seconds = _board_timeout(board_timeout_seconds)
 
     resolution = resolve_company_boards(
         session, limit=max_companies, csv_text=csv_text
@@ -253,16 +342,35 @@ def sync_company_boards(
             if fetcher is None:
                 result.errors.append(f"{board.key}: unsupported platform")
                 continue
-            fetch = fetcher(client, board, etag=etags.get(board.key))
+
+            _emit_board_progress(
+                on_board_progress,
+                board=board,
+                status="fetching",
+            )
+            fetch = _fetch_board_with_timeout(
+                fetcher,
+                client,
+                board,
+                etag=etags.get(board.key),
+                timeout_seconds=timeout_seconds,
+            )
             if not fetch.ok:
-                # Unverified boards are treated as unresolved for that company token.
-                result.errors.append(
-                    f"{board.platform}/{board.board_token}: {fetch.error or 'fetch failed'}"
+                err = fetch.error or "fetch failed"
+                result.errors.append(f"{board.platform}/{board.board_token}: {err}")
+                result.notes.append(
+                    f"{board.company} ({board.platform}): error — {err}"
+                )
+                _emit_board_progress(
+                    on_board_progress,
+                    board=board,
+                    status="error",
+                    error=err,
                 )
                 result.unresolved.append(
                     UnresolvedCompany(
                         company=board.company,
-                        reason=f"board_verify_failed:{fetch.error or 'error'}",
+                        reason=f"board_verify_failed:{err}",
                     )
                 )
                 continue
@@ -273,10 +381,26 @@ def sync_company_boards(
                 etags[board.key] = fetch.etag
 
             if fetch.not_modified:
-                result.notes.append(f"{board.key}: not modified (304)")
+                note = f"{board.company} ({board.platform}): not modified (304)"
+                result.notes.append(note)
+                _emit_board_progress(
+                    on_board_progress,
+                    board=board,
+                    status="not_modified",
+                )
                 continue
 
             result.fetched += len(fetch.jobs)
+            result.notes.append(
+                f"{board.company} ({board.platform}): fetched {len(fetch.jobs)}"
+            )
+            _emit_board_progress(
+                on_board_progress,
+                board=board,
+                status="ok",
+                fetched=len(fetch.jobs),
+            )
+
             seen_keys: set[str] = set()
             for idx, job in enumerate(fetch.jobs, start=1):
                 seen_keys.add(job.source_import_key)
@@ -285,7 +409,8 @@ def sync_company_boards(
                 existing = (
                     session.query(JobPosting.id)
                     .filter(JobPosting.source_import_key == job.source_import_key)
-                    .one_or_none()
+                    .order_by(JobPosting.created_at.asc(), JobPosting.id.asc())
+                    .first()
                 )
                 is_newish = existing is None
                 data = board_job_to_import_dict(
@@ -314,6 +439,7 @@ def sync_company_boards(
                         source_type="board_api",
                         legacy_source="board_api",
                         reclassify_on_update=False,
+                        warnings_out=result.errors,
                     )
                     if created:
                         result.new += 1
@@ -361,4 +487,112 @@ def sync_company_boards(
                 "error_samples": result.errors[:10],
             },
         )
+    return result
+
+
+def backfill_board_dates(
+    session: Session,
+    *,
+    dry_run: bool = True,
+    limit: int | None = None,
+    csv_text: str | None = None,
+    client: BoardHttpClient | None = None,
+    board_timeout_seconds: float | None = None,
+    on_board_progress: BoardProgressCallback | None = None,
+) -> BoardDatesBackfillResult:
+    """Re-fetch resolved boards and set JobPosting.posted_at from vendor dates only.
+
+    Never invents dates. Jobs without a reliable source date are left unchanged
+    (UI continues to use First seen via job_recency).
+    """
+    result = BoardDatesBackfillResult(dry_run=dry_run)
+    max_companies = _max_companies(limit)
+    timeout_seconds = _board_timeout(board_timeout_seconds)
+
+    resolution = resolve_company_boards(
+        session, limit=max_companies, csv_text=csv_text
+    )
+    result.companies_checked = len(resolution.companies)
+    if resolution.sheet_error:
+        result.errors.append(f"referral_sheet: {resolution.sheet_error}")
+        return result
+
+    session.rollback()
+
+    own_client = client is None
+    if client is None:
+        client = BoardHttpClient()
+
+    try:
+        for board in resolution.boards:
+            result.boards_attempted += 1
+            fetcher = _FETCHERS.get(board.platform)
+            if fetcher is None:
+                result.errors.append(f"{board.key}: unsupported platform")
+                continue
+
+            _emit_board_progress(
+                on_board_progress, board=board, status="fetching"
+            )
+            fetch = _fetch_board_with_timeout(
+                fetcher,
+                client,
+                board,
+                etag=None,
+                timeout_seconds=timeout_seconds,
+            )
+            if not fetch.ok:
+                err = fetch.error or "fetch failed"
+                result.errors.append(f"{board.platform}/{board.board_token}: {err}")
+                _emit_board_progress(
+                    on_board_progress,
+                    board=board,
+                    status="error",
+                    error=err,
+                )
+                continue
+
+            result.boards_ok += 1
+            result.jobs_seen += len(fetch.jobs)
+            result.notes.append(
+                f"{board.company} ({board.platform}): fetched {len(fetch.jobs)}"
+            )
+            _emit_board_progress(
+                on_board_progress,
+                board=board,
+                status="ok",
+                fetched=len(fetch.jobs),
+            )
+
+            for job in fetch.jobs:
+                parsed = _parse_date(job.posted_at)
+                if parsed is None:
+                    result.no_source_date += 1
+                    continue
+                existing = (
+                    session.query(JobPosting)
+                    .options(
+                        load_only(JobPosting.id, JobPosting.posted_at)
+                    )
+                    .filter(JobPosting.source_import_key == job.source_import_key)
+                    .order_by(JobPosting.created_at.asc(), JobPosting.id.asc())
+                    .first()
+                )
+                if existing is None:
+                    result.missing_local += 1
+                    continue
+                if existing.posted_at is not None:
+                    result.already_had_posted_at += 1
+                    continue
+                result.posted_at_set += 1
+                if dry_run:
+                    continue
+                existing.posted_at = parsed
+                session.add(existing)
+            if not dry_run:
+                session.commit()
+    finally:
+        if own_client and client is not None:
+            client.close()
+
     return result
