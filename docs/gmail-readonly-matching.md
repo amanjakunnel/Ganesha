@@ -3,9 +3,20 @@
 ## Scope
 
 - OAuth scope: **`gmail.readonly` only**
-- Read confirmation-style messages (thank you for applying / application received)
-- Bounded date range (default 365 days), rate-limited
+- Read confirmation-style messages (thank-you / application-received / thanks-for-your-interest, plus optional Greenhouse/Lever/Ashby noreply `from:` filters)
+- Bounded date range (default covers `saved_only` span, at least 365 days), rate-limited, `maxResults=100` with `pageToken` paging
 - **Never** send, label, draft, or modify mail
+
+## CLI
+
+```bash
+python -m apps.cli.main jobs gmail-diagnose
+python -m apps.cli.main jobs gmail-preview --days 400
+# Persist only after preview, and only when matches>0:
+python -m apps.cli.main jobs gmail-preview --persist
+```
+
+Diagnose/preview print aggregates only (sender-domain histogram, counts). No bodies/subjects.
 
 ## What is stored
 

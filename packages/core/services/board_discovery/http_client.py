@@ -35,11 +35,19 @@ class BoardHttpClient:
             kwargs["transport"] = transport
         self._client = httpx.Client(**kwargs)
 
-    def get(self, url: str, *, etag: str | None = None) -> httpx.Response:
+    def get(
+        self,
+        url: str,
+        *,
+        etag: str | None = None,
+        accept: str | None = None,
+    ) -> httpx.Response:
         self._pace()
         headers: dict[str, str] = {}
         if etag:
             headers["If-None-Match"] = etag
+        if accept:
+            headers["Accept"] = accept
         response = self._client.get(url, headers=headers)
         self._last_request_at = time.monotonic()
         return response
